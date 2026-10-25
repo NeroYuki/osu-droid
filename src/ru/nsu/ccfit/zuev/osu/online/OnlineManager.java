@@ -274,6 +274,11 @@ public class OnlineManager {
         this.username = username;
         this.password = password;
 
+        if (username == null || username.trim().isEmpty() || password == null || password.trim().isEmpty()) {
+            failMessage = "Username or password is empty";
+            return false;
+        }
+
         // --- Hardware Attestation: Step 1 — get challenge & generate key pair ---
         // If a key was generated less than KEY_TTL_MS (15 min) ago, reuse it — no new
         // challenge fetch or key generation is needed. This avoids the overhead of key
