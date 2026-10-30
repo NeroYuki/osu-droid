@@ -2782,6 +2782,14 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
         }
     }
 
+    @Override
+    public void onSpinnerRequiredSpin(int id) {
+        stat.registerSpinnerHit();
+        if (spectatorDataManager != null) {
+            spectatorDataManager.addEvent();
+        }
+    }
+
     public void onSpinnerHit(int id, final int score, final boolean endCombo, int totalScore) {
         if (score == 1000) {
             stat.registerHit(score, false, false);
