@@ -2370,7 +2370,7 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
         cancelStoryboardLoading();
         cancelVideoLoading();
         if (spectatorDataManager != null) {
-            spectatorDataManager.pauseTimer();
+            spectatorDataManager.stopSubmission();
             spectatorDataManager = null;
         }
 
@@ -2720,6 +2720,9 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
                 if (incrementCombo) {
                     scoreName = "sliderpoint30";
                     stat.registerHit(30, false, false);
+                    if (spectatorDataManager != null) {
+                        spectatorDataManager.addEvent();
+                    }
                     stat.addSliderHeadHit();
                     createBurstEffectSliderStart(judgementPos, color);
 
@@ -2742,6 +2745,9 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
                 if (incrementCombo) {
                     scoreName = "sliderpoint30";
                     stat.registerHit(30, false, false);
+                    if (spectatorDataManager != null) {
+                        spectatorDataManager.addEvent();
+                    }
                     stat.addSliderRepeatHit();
                 }
                 break;
@@ -2750,6 +2756,9 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
                 if (incrementCombo) {
                     scoreName = "sliderpoint10";
                     stat.registerHit(10, false, false);
+                    if (spectatorDataManager != null) {
+                        spectatorDataManager.addEvent();
+                    }
                     stat.addSliderTickHit();
                 }
                 break;
@@ -3487,6 +3496,13 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
         if (replay != null && !replaying) {
             short acc = (short) (accuracy);
             replay.addObjectResult(id, acc, (BitSet) tickSet.clone());
+        }
+    }
+
+    @Override
+    public void onSliderPartJudged(int id, int firstHitAccuracy, BitSet tickSet, int judgedCount) {
+        if (spectatorDataManager != null) {
+            spectatorDataManager.addPartialObjectData(id, firstHitAccuracy, tickSet, judgedCount);
         }
     }
 
