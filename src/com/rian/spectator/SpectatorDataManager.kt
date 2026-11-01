@@ -46,7 +46,10 @@ class SpectatorDataManager(
 
     private val task = object : TimerTask() {
         override fun run() {
-            val secPassed = gameScene.elapsedTime
+            // Important: this is not using `elapsedTime` as it is recorded *before* `GameScene`'s update pass is ran,
+            // so a chunk could claim a time whose data only arrives in the next chunk. Everything up to
+            // `processedTime` is already recorded, and the copies below take whatever has been recorded since.
+            val secPassed = gameScene.processedTime
             val gameHasEnded = gameEnded
 
             try {
