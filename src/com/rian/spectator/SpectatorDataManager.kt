@@ -5,14 +5,19 @@ import com.osudroid.multiplayer.api.RoomAPI
 import com.osudroid.beatmaps.hitobjects.HitCircle
 import com.osudroid.beatmaps.hitobjects.Slider
 import ru.nsu.ccfit.zuev.osu.game.GameScene
-import ru.nsu.ccfit.zuev.osu.online.OnlineManager.OnlineManagerException
 import ru.nsu.ccfit.zuev.osu.scoring.Replay
 import ru.nsu.ccfit.zuev.osu.scoring.StatisticV2
 import ru.nsu.ccfit.zuev.osu.scoring.TouchType
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
-import java.io.IOException
 import java.util.*
+import kotlin.time.DurationUnit
+import kotlin.time.toDuration
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 /**
  * Holds spectator data that will be sent to the server periodically.
@@ -22,7 +27,7 @@ class SpectatorDataManager(
     private val replay: Replay,
     private val stat: StatisticV2
 ) {
-    // Appended to on the game thread and read on the submission timer's thread: guard every access with
+    // Appended to on the game thread and read on the submission coroutine's thread: guard every access with
     // synchronized(objectData) / synchronized(events). Cursor moves are guarded the same way, by their MoveArray.
     private val objectData = mutableListOf<SpectatorObjectData>()
     private var beginningObjectDataIndex = 0
@@ -35,8 +40,9 @@ class SpectatorDataManager(
     private val beginningCursorMoveIndexes = IntArray(GameScene.CursorCount)
     private val endCursorMoveIndexes = IntArray(GameScene.CursorCount)
 
-    private val submissionTimer = Timer()
-    private val submissionPeriod = 5000L
+    private val submissionPeriod = 5000L.toDuration(DurationUnit.MILLISECONDS)
+
+    @Volatile
     private var gameEnded = false
 
     // Reused by every submission, so the buffer keeps its capacity between chunks. Both streams only hold memory, so
@@ -44,104 +50,120 @@ class SpectatorDataManager(
     private val chunkBuffer = ByteArrayOutputStream(8192)
     private val chunkOutput = DataOutputStream(chunkBuffer)
 
-    private val task = object : TimerTask() {
-        override fun run() {
-            val secPassed = gameScene.elapsedTime
-            val gameHasEnded = gameEnded
+    /**
+     * Sends every chunk, one [submissionPeriod] after the previous one was sent, until the game has ended or
+     * [stopSubmission] is called.
+     *
+     * A delay loop rather than a fixed-rate schedule: after a stall (a long GC pause or a slow send), the next chunk
+     * simply carries more data instead of several submissions firing back to back.
+     */
+    private val submissionJob = CoroutineScope(Dispatchers.IO).launch {
+        while (isActive) {
+            delay(submissionPeriod)
 
-            try {
-                chunkBuffer.reset()
-
-                chunkOutput.writeFloat(secPassed)
-                chunkOutput.writeInt(endCursorMoveIndexes.size)
-
-                // Each slice is written while holding its lock rather than copied out first. The game thread only
-                // waits for that one slice's writes into memory.
-                for (i in endCursorMoveIndexes.indices) {
-                    val move = replay.cursorMoves[i]
-
-                    synchronized(move) {
-                        val begin = beginningCursorMoveIndexes[i]
-                        val end = move.size
-
-                        endCursorMoveIndexes[i] = end
-                        chunkOutput.writeInt(end - begin)
-
-                        for (j in begin until end) {
-                            val movement = move.movements[j]
-
-                            chunkOutput.writeInt((movement.time shl 2) + movement.touchType.id)
-
-                            if (movement.touchType != TouchType.UP) {
-                                chunkOutput.writeFloat(movement.x)
-                                chunkOutput.writeFloat(movement.y)
-                            }
-                        }
-                    }
-                }
-
-                synchronized(objectData) {
-                    endObjectDataIndex = objectData.size
-                    chunkOutput.writeInt(endObjectDataIndex - beginningObjectDataIndex)
-
-                    for (j in beginningObjectDataIndex until endObjectDataIndex) {
-                        objectData[j].writeTo(chunkOutput)
-                    }
-                }
-
-                synchronized(events) {
-                    endEventIndex = events.size
-                    chunkOutput.writeInt(endEventIndex - beginningEventIndex)
-
-                    for (j in beginningEventIndex until endEventIndex) {
-                        val event = events[j]
-
-                        chunkOutput.writeFloat(event.time)
-                        chunkOutput.writeLong(event.score)
-                        chunkOutput.writeInt(event.combo)
-                        chunkOutput.writeInt(event.hit300)
-                        chunkOutput.writeInt(event.hit100)
-                        chunkOutput.writeInt(event.hit50)
-                        chunkOutput.writeInt(event.misses)
-                    }
-                }
-
-                chunkOutput.flush()
-
-                // The socket keeps the payload until it is sent, so it gets its own copy rather than the reused buffer.
-                val submitted = RoomAPI.submitSpectatorData(chunkBuffer.toByteArray())
-
-                postDataSend(submitted, gameHasEnded)
-            } catch (e: IOException) {
-                Log.e("SpectatorDataManager", "IOException: " + e.message, e)
-                postDataSend(false)
-            } catch (e: OnlineManagerException) {
-                Log.e("SpectatorDataManager", "OnlineManagerException: " + e.message, e)
-                postDataSend(false)
-            }
-        }
-
-        private fun postDataSend(submitSuccess: Boolean, gameHasEnded: Boolean = false) {
-            if (gameHasEnded) {
-                cancel()
-                submissionTimer.cancel()
-                return
-            }
-
-            if (submitSuccess) {
-                endCursorMoveIndexes.copyInto(beginningCursorMoveIndexes)
-                beginningObjectDataIndex = endObjectDataIndex
-                beginningEventIndex = endEventIndex
+            if (!submitChunk()) {
+                break
             }
         }
     }
 
-    init {
-        submissionTimer.scheduleAtFixedRate(
-            task,
-            submissionPeriod,
-            submissionPeriod
-        )
+    /**
+     * Writes and sends everything recorded since the last successful submission.
+     *
+     * @return Whether to keep submitting, which is `false` once the chunk sent after the game ended has gone out.
+     */
+    private fun submitChunk(): Boolean {
+        // Important: this is not using `elapsedTime` as it is recorded *before* `GameScene`'s update pass is ran,
+        // so a chunk could claim a time whose data only arrives in the next chunk. Everything up to
+        // `processedTime` is already recorded, and the copies below take whatever has been recorded since.
+        val secPassed = gameScene.processedTime
+        val gameHasEnded = gameEnded
+
+        // Any exception is caught, not only I/O ones: one escaping would end the loop, and with it every later
+        // submission of the round. The data stays queued and goes out with the next chunk instead.
+        val submitted = try {
+            writeChunk(secPassed)
+
+            // The socket keeps the payload until it is sent, so it gets its own copy rather than the reused buffer.
+            RoomAPI.submitSpectatorData(chunkBuffer.toByteArray())
+        } catch (e: Exception) {
+            Log.e("SpectatorDataManager", "Failed to submit spectator data", e)
+
+            // Retried with the next chunk even after the game has ended, as before.
+            return true
+        }
+
+        if (gameHasEnded) {
+            return false
+        }
+
+        if (submitted) {
+            endCursorMoveIndexes.copyInto(beginningCursorMoveIndexes)
+            beginningObjectDataIndex = endObjectDataIndex
+            beginningEventIndex = endEventIndex
+        }
+
+        return true
+    }
+
+    private fun writeChunk(secPassed: Float) {
+        chunkBuffer.reset()
+
+        chunkOutput.writeFloat(secPassed)
+        chunkOutput.writeInt(endCursorMoveIndexes.size)
+
+        // Each slice is written while holding its lock rather than copied out first. The game thread only waits for
+        // that one slice's writes into memory.
+        for (i in endCursorMoveIndexes.indices) {
+            val move = replay.cursorMoves[i]
+
+            synchronized(move) {
+                val begin = beginningCursorMoveIndexes[i]
+                val end = move.size
+
+                endCursorMoveIndexes[i] = end
+                chunkOutput.writeInt(end - begin)
+
+                for (j in begin until end) {
+                    val movement = move.movements[j]
+
+                    chunkOutput.writeInt((movement.time shl 2) + movement.touchType.id)
+
+                    if (movement.touchType != TouchType.UP) {
+                        chunkOutput.writeFloat(movement.x)
+                        chunkOutput.writeFloat(movement.y)
+                    }
+                }
+            }
+        }
+
+        synchronized(objectData) {
+            endObjectDataIndex = objectData.size
+            chunkOutput.writeInt(endObjectDataIndex - beginningObjectDataIndex)
+
+            for (j in beginningObjectDataIndex until endObjectDataIndex) {
+                objectData[j].writeTo(chunkOutput)
+            }
+        }
+
+        synchronized(events) {
+            endEventIndex = events.size
+            chunkOutput.writeInt(endEventIndex - beginningEventIndex)
+
+            for (j in beginningEventIndex until endEventIndex) {
+                val event = events[j]
+
+                chunkOutput.writeFloat(event.time)
+                chunkOutput.writeLong(event.score)
+                chunkOutput.writeInt(event.combo)
+                chunkOutput.writeInt(event.hit300)
+                chunkOutput.writeInt(event.hit100)
+                chunkOutput.writeInt(event.hit50)
+                chunkOutput.writeInt(event.misses)
+            }
+        }
+
+        chunkOutput.flush()
     }
 
     /**
@@ -241,14 +263,11 @@ class SpectatorDataManager(
     }
 
     /**
-     * Stops submitting spectator data for good. The underlying [Timer] cannot be rescheduled once cancelled.
+     * Stops submitting spectator data for good. Submission cannot be restarted afterwards.
      */
-    fun stopSubmission() = submissionTimer.cancel()
+    fun stopSubmission() = submissionJob.cancel()
 
     fun setGameEnded(gameEnded: Boolean) {
         this.gameEnded = gameEnded
     }
-
-    @Throws(Throwable::class)
-    protected fun finalize() = stopSubmission()
 }

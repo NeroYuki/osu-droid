@@ -186,6 +186,16 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
     private boolean gameStarted;
     private int failcount;
     private final GameplayFrameStabilityClock gameplayClock;
+
+    /**
+     * The gameplay time, in seconds, up to which every update pass has finished, written at the end of each pass.
+     * <br>
+     * Unlike {@link #getElapsedTime()}, which advances at the start of a pass before hit objects are processed,
+     * all data recorded up to this time (judgements, score events, cursor moves) has already been recorded when another
+     * thread reads it. Volatile so that such a read also sees that data.
+     */
+    private volatile float processedTime;
+
     private float initialStartTime;
     private int totalLength = Integer.MAX_VALUE;
     private boolean paused;
@@ -1506,6 +1516,8 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
         GlobalManager.getInstance().getMainActivity().reapplyWakeLock();
 
         if (Multiplayer.isMultiplayer && Multiplayer.isConnected() && Multiplayer.room != null) {
+            // Nothing has been processed yet, and nothing can be recorded before the start time.
+            processedTime = gameplayClock.getCurrentTime();
             spectatorDataManager = new SpectatorDataManager(this, replay, stat);
         }
 
@@ -3480,6 +3492,13 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
         return gameplayClock.getCurrentTime();
     }
 
+    /**
+     * The gameplay time up to which every update pass has finished, in seconds. Safe to read from any thread.
+     */
+    public float getProcessedTime() {
+        return processedTime;
+    }
+
     @Override
     public boolean isAfterSeek() {
         return postSeekFrameCount > 0;
@@ -4266,6 +4285,9 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
             }
 
             super.onManagedUpdate(secElapsed);
+
+            // Last, so that everything this pass records is in place before the time is published.
+            processedTime = gameplayClock.getCurrentTime();
         }
 
         private void applyRawPointerFastPath(final Camera camera) {
