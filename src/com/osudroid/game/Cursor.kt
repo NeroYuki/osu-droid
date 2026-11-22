@@ -1,6 +1,7 @@
 package com.osudroid.game
 
 import android.os.SystemClock
+import java.util.BitSet
 
 import org.anddev.andengine.input.touch.TouchEvent
 
@@ -34,6 +35,13 @@ class Cursor {
     var latestProcessedDownEventIndex = 0
 
     /**
+     * The indices of [downEvents] that were claimed by a gameplay object.
+     *
+     * Without a claim, every object locked behind the claiming object would also react to the same press.
+     */
+    private val claimedDownEvents = BitSet()
+
+    /**
      * [CursorEvent]s of this [Cursor] that have not been processed yet.
      */
     @JvmField
@@ -46,9 +54,25 @@ class Cursor {
     var latestProcessedEventIndex = 0
 
     /**
-     * The latest [CursorEvent] of this [Cursor].
+     * The latest [CursorEvent] of this [Cursor], or `null` if there are no [CursorEvent]s.
      */
-    private var latestEvent: CursorEvent? = null
+    var latestEvent: CursorEvent? = null
+        private set
+
+    /**
+     * Whether the [CursorEvent] at the given index of [downEvents] was claimed by a gameplay object.
+     *
+     * @param index The index of the [CursorEvent] in [downEvents].
+     */
+    fun isDownEventClaimed(index: Int) = claimedDownEvents[index]
+
+    /**
+     * Claims the [CursorEvent] at the given index of [downEvents] for a gameplay object, so that other gameplay
+     * objects do not react to it.
+     *
+     * @param index The index of the [CursorEvent] in [downEvents].
+     */
+    fun claimDownEvent(index: Int) = claimedDownEvents.set(index)
 
     /**
      * Adds a [CursorEvent] to this [Cursor].
@@ -69,42 +93,6 @@ class Cursor {
         }
 
         latestEvent = event
-    }
-
-    /**
-     * Obtains the latest [CursorEvent] of this [Cursor].
-     *
-     * @param actions The actions to filter by. If none are provided, no filtering is done.
-     * @return The latest [CursorEvent], or [latestEvent] or `null` if there are no [CursorEvent]s.
-     */
-    fun getLatestEvent(vararg actions: Int): CursorEvent? {
-        if (actions.isEmpty()) {
-            return latestEvent
-        }
-
-        if (!events.isEmpty()) {
-            val size = events.size
-
-            for (i in size - 1 downTo 0) {
-                val event = events[i]
-
-                for (j in actions.indices) {
-                    if (event.action == actions[j]) {
-                        return event
-                    }
-                }
-            }
-        }
-
-        if (latestEvent != null) {
-            for (i in actions.indices) {
-                if (latestEvent!!.action == actions[i]) {
-                    return latestEvent
-                }
-            }
-        }
-
-        return null
     }
 
     /**
@@ -196,6 +184,7 @@ class Cursor {
         }
 
         downEvents.clear()
+        claimedDownEvents.clear()
         events.clear()
         latestProcessedDownEventIndex = 0
         latestProcessedEventIndex = 0

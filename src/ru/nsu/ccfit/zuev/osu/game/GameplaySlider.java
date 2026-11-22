@@ -7,7 +7,10 @@ import com.edlplan.framework.math.FMath;
 import com.edlplan.framework.math.line.LinePath;
 import com.edlplan.osu.support.slider.SliderBody;
 import com.osudroid.game.CursorEvent;
+import com.osudroid.game.PressResult;
+import com.osudroid.game.ShakeKt;
 import com.osudroid.utils.Execution;
+import com.reco1l.framework.EasingKt;
 import com.reco1l.andengine.UIScene;
 import com.reco1l.andengine.component.UIComponent;
 import com.reco1l.andengine.sprite.UIAnimatedSprite;
@@ -53,6 +56,12 @@ public class GameplaySlider extends GameObject {
 
     // Avoid rebuilding slider body mesh for tiny length deltas every frame.
     private static final float snakeLengthUpdateThreshold = 0.75f;
+
+    private static final double reverseArrowPulsePeriod = 0.3;
+    private static final double reverseArrowPulseOutDuration = 0.035;
+    private static final double reverseArrowPulseInDuration = 0.25;
+    private static final float reverseArrowPulseScale = 1.3f;
+    private static final float reverseArrowFadeIn = 0.15f;
 
     private final UISprite approachCircle;
     private final UISprite startArrow, endArrow;
@@ -285,6 +294,9 @@ public class GameplaySlider extends GameObject {
         tailCirclePiece.setAlpha(0);
         tailCirclePiece.setVisible(applyIncreasedVisibilityToCirclePiece);
 
+        var tailCirclePosition = Config.isSnakingInSliders() ? position : pathEndPosition;
+        tailCirclePiece.setPosition(tailCirclePosition.x, tailCirclePosition.y);
+
         // Repeat arrow at start
         int spanCount = beatmapSlider.getSpanCount();
         if (spanCount > 2) {
@@ -309,22 +321,17 @@ public class GameplaySlider extends GameObject {
 
             if (Config.isSnakingInSliders()) {
                 getPositionAt(0, false, true);
-
-                tailCirclePiece.setPosition(position.x, position.y);
                 endArrow.setPosition(position.x, position.y);
             } else {
                 getPositionAt(1, false, true);
-
-                tailCirclePiece.setPosition(pathEndPosition.x, pathEndPosition.y);
                 endArrow.setPosition(pathEndPosition.x, pathEndPosition.y);
             }
 
             scene.attachChild(endArrow, 0);
 
-            // We can use headFadeIn here since the tail's fade in time is the same as the head.
             endArrow.beginAbsoluteSequence(initialModifierTime, sequence -> sequence
                     .delay(fadeInDelay)
-                    .fadeIn(headFadeIn));
+                    .fadeIn(reverseArrowFadeIn));
         }
 
         scene.attachChild(tailCirclePiece, 0);
@@ -354,6 +361,7 @@ public class GameplaySlider extends GameObject {
                     sequence -> sliderHeadLateMissFadeModifier = sequence
                             .fadeOut(mehWindow - okWindow)
                             .after(e -> sliderHeadLateMissFadeModifier = null)
+                            .aborted(e -> sliderHeadLateMissFadeModifier = null)
                             .getLastActiveModifier());
 
             tailCirclePiece.beginAbsoluteSequence(initialModifierTime, sequence -> sequence
@@ -592,6 +600,15 @@ public class GameplaySlider extends GameObject {
         sliderBody.clearEntityModifiers();
         tickContainer.clearEntityModifiers();
 
+        // Clearing modifiers may interrupt a shake. Reset its translation so it does not leak into the next use.
+        headCirclePiece.setTranslationX(0f);
+        tailCirclePiece.setTranslationX(0f);
+        startArrow.setTranslationX(0f);
+        endArrow.setTranslationX(0f);
+        approachCircle.setTranslationX(0f);
+        sliderBody.setTranslationX(0f);
+        tickContainer.setTranslationX(0f);
+
         headCirclePiece.detachSelf();
         tailCirclePiece.detachSelf();
         startArrow.detachSelf();
@@ -601,8 +618,6 @@ public class GameplaySlider extends GameObject {
         ball.detachSelf();
         sliderBody.detachSelf();
         tickContainer.detachSelf();
-
-        sliderHeadLateMissFadeModifier = null;
 
         // removeFromScene() stops looping sounds and releases hit samples, but during a seek, onExpire() fires without
         // removeFromScene(). This causes looping sounds to continuously play after a seek, and nested hit samples
@@ -859,6 +874,18 @@ public class GameplaySlider extends GameObject {
         isInRadius = isTracking;
     }
 
+    private void startShake() {
+        float magnitude = getShakeMagnitude(beatmapSlider);
+
+        ShakeKt.shake(approachCircle, magnitude);
+        ShakeKt.shake(headCirclePiece, magnitude);
+        ShakeKt.shake(tailCirclePiece, magnitude);
+        ShakeKt.shake(startArrow, magnitude);
+        ShakeKt.shake(endArrow, magnitude);
+        ShakeKt.shake(sliderBody, magnitude);
+        ShakeKt.shake(tickContainer, magnitude);
+    }
+
     @Override
     public void update(final float dt) {
 
@@ -874,12 +901,12 @@ public class GameplaySlider extends GameObject {
             if (replayObjectData == null) {
                 if (!autoPlay) {
                     if (elapsedTime <= getLateHitThreshold()) {
-                        if (listener.isObjectHittable(this)) {
-                            var hittingCursor = getHittingCursor(listener, beatmapSlider.getHead(), elapsedTime);
+                        var press = checkPresses(listener, beatmapSlider.getHead(), elapsedTime);
 
-                            if (hittingCursor != null) {
-                                onSliderHeadHit((hittingCursor.getHitTime() - beatmapSlider.startTime) / 1000);
-                            }
+                        if (press instanceof PressResult.Hit hit) {
+                            onSliderHeadHit((hit.getEvent().getHitTime() - beatmapSlider.startTime) / 1000);
+                        } else if (press == PressResult.Shake.INSTANCE) {
+                            startShake();
                         }
                     } else {
                         // If it's too late, mark this hit missing.
@@ -944,6 +971,8 @@ public class GameplaySlider extends GameObject {
                     endArrow.setPosition(pathEndPosition.x, pathEndPosition.y);
                 }
             }
+
+            animateEndArrow();
             return;
         }
 
@@ -1018,6 +1047,8 @@ public class GameplaySlider extends GameObject {
         ball.setPosition(ballPos.x, ballPos.y);
         ball.setRotation(ballAngle);
 
+        animateEndArrow();
+
         if (GameHelper.isAutoplay() || GameHelper.isAutopilot()) {
             listener.updateAutoBasedPos(ballPos.x, ballPos.y);
         }
@@ -1026,6 +1057,31 @@ public class GameplaySlider extends GameObject {
         if (percentage >= 1) {
             onSpanFinish();
         }
+    }
+
+    private void animateEndArrow() {
+        if ((!Config.isSnakingInSliders() && !Config.isSnakingOutSliders()) || beatmapSlider == null || beatmapSlider.getSpanCount() <= 1) {
+            return;
+        }
+
+        double t = elapsedSpanTime + (completedSpanCount == 0 ? timePreempt : spanDuration);
+
+        if (t < 0) {
+            return;
+        }
+
+        double loopTime = t % reverseArrowPulsePeriod;
+        float pulse;
+
+        if (loopTime < reverseArrowPulseOutDuration) {
+            float progress = (float) (loopTime / reverseArrowPulseOutDuration);
+            pulse = 1f + (reverseArrowPulseScale - 1f) * EasingKt.interpolate(Easing.Out, progress);
+        } else {
+            float progress = (float) ((loopTime - reverseArrowPulseOutDuration) / reverseArrowPulseInDuration);
+            pulse = reverseArrowPulseScale - (reverseArrowPulseScale - 1f) * EasingKt.interpolate(Easing.Out, progress);
+        }
+
+        endArrow.setScale(beatmapSlider.getScreenSpaceGameplayScale() * pulse);
     }
 
     @Override
@@ -1190,7 +1246,6 @@ public class GameplaySlider extends GameObject {
         if (beatmapSlider.getSpanCount() - completedSpanCount > 1) {
             if (sliderHeadLateMissFadeModifier != null) {
                 headCirclePiece.removeModifier(sliderHeadLateMissFadeModifier);
-                sliderHeadLateMissFadeModifier = null;
             }
 
             // Change the head circle to the end circle piece.
@@ -1201,6 +1256,7 @@ public class GameplaySlider extends GameObject {
             startArrow.setAlpha(1);
         } else if (headCirclePiece.isVisible()) {
             headCirclePiece.clearEntityModifiers();
+            headCirclePiece.setTranslationX(0f);
 
             if (hitOffset >= -mehWindow || headCirclePiece.getAlpha() == 0) {
                 headCirclePiece.detachSelf();

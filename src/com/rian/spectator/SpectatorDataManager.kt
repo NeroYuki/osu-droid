@@ -62,15 +62,19 @@ class SpectatorDataManager(
                         val beginningIndex = beginningCursorMoveIndexes[i]
                         val endIndex = endCursorMoveIndexes[i]
 
-                        writeInt(endIndex - beginningIndex)
+                        // Upstream reuses redundant movement objects; take each cursor chunk
+                        // under the same monitor as the writer to keep its fields consistent.
+                        synchronized(move) {
+                            writeInt(endIndex - beginningIndex)
 
-                        for (j in beginningIndex until endIndex) {
-                            val movement = move.movements[j]
-                            writeInt((movement.time shl 2) + movement.touchType.id)
+                            for (j in beginningIndex until endIndex) {
+                                val movement = move.movements[j]
+                                writeInt((movement.time shl 2) + movement.touchType.id)
 
-                            if (movement.touchType != TouchType.UP) {
-                                writeFloat(movement.x * Config.getTextureQuality())
-                                writeFloat(movement.y * Config.getTextureQuality())
+                                if (movement.touchType != TouchType.UP) {
+                                    writeFloat(movement.x * Config.getTextureQuality())
+                                    writeFloat(movement.y * Config.getTextureQuality())
+                                }
                             }
                         }
                     }

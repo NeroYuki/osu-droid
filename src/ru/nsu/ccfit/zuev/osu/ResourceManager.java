@@ -140,8 +140,6 @@ public class ResourceManager {
         customSounds.clear();
         customTextures.clear();
         customFrameCount.clear();
-
-        initSecurityUtils();
     }
 
     public void loadSkin(String folder) {

@@ -12,8 +12,9 @@ import com.osudroid.multiplayer.api.data.WinCondition
 import com.osudroid.multiplayer.api.data.parseGameplaySettings
 import com.reco1l.framework.net.JsonArrayRequest
 import com.reco1l.framework.net.JsonObjectRequest
-import ru.nsu.ccfit.zuev.osu.security.AttestationState
-import ru.nsu.ccfit.zuev.osu.security.HardwareAttestationManager
+import com.osudroid.online.AttestationState
+import com.osudroid.online.HardwareAttestationManager
+import ru.nsu.ccfit.zuev.osu.SecurityUtils
 import org.json.JSONObject
 
 object LobbyAPI {
@@ -43,7 +44,7 @@ object LobbyAPI {
     /**
      * Get room list.
      */
-    fun getRooms(query: String?, uid: Long, sessionId: String, sign: String?): List<Room> {
+    fun getRooms(query: String?, uid: Long, sessionId: String): List<Room> {
 
         if (BuildSettings.MOCK_MULTIPLAYER) {
             return listOf(
@@ -54,14 +55,13 @@ object LobbyAPI {
         }
 
         JsonArrayRequest("$HOST$GET_ROOMS").use {
+            val sign = SecurityUtils.signRequest("${query ?: ""}_${uid}_${sessionId}")
 
-            if (sign != null || query != null) {
-                it.buildUrl {
-                    addQueryParameter("sign", sign)
-                    addQueryParameter("query", query)
-                    addQueryParameter("uid", uid.toString())
-                    addQueryParameter("sessionId", sessionId)
-                }
+            it.buildUrl {
+                addQueryParameter("query", query ?: "")
+                addQueryParameter("uid", uid.toString())
+                addQueryParameter("sessionId", sessionId)
+                addQueryParameter("sign", sign)
             }
 
             return List(it.execute().json.length()) { i ->
@@ -95,13 +95,22 @@ object LobbyAPI {
     /**
      * Create room and get the ID.
      */
-    fun createRoom(name: String, beatmap: RoomBeatmap?, hostUID: Long, sessionId: String, sign: String?, password: String? = null, maxPlayers: Int = 8): Long {
+    fun createRoom(name: String, beatmap: RoomBeatmap?, hostUID: Long, sessionId: String, password: String? = null, maxPlayers: Int = 8): Long {
 
         if (BuildSettings.MOCK_MULTIPLAYER) {
             return 1
         }
 
+        // Blank passwords are not sent, so they must not be signed either.
+        val password = password?.takeUnless { it.isBlank() }
+
         JsonObjectRequest("$HOST$CREATE_ROOM").use { request ->
+            var signPayload = "${hostUID}_${name}_${maxPlayers}"
+            if (password != null) {
+                signPayload += "_${password}"
+            }
+            signPayload += "_${RoomAPI.API_VERSION}_${sessionId}"
+            val sign = SecurityUtils.signRequest(signPayload)
 
             request.buildRequestBody {
 
@@ -119,7 +128,7 @@ object LobbyAPI {
                     })
                 }
 
-                if (!password.isNullOrBlank()) {
+                if (password != null) {
                     put("password", password)
                 }
 
@@ -133,8 +142,7 @@ object LobbyAPI {
                 if (AttestationState.sessionAttestationReady) {
                     try {
                         val sigPayload = "${hostUID}_${name}_${maxPlayers}_${sessionId}"
-                        val sig = HardwareAttestationManager.signData(
-                            sigPayload.toByteArray(Charsets.UTF_8))
+                        val sig = HardwareAttestationManager.signToBase64(sigPayload)
                         if (sig != null) {
                             put("attestationSignature", sig)
                             Log.i("LobbyAPI", "Attestation signature attached to createRoom.")

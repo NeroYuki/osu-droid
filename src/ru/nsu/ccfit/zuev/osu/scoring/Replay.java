@@ -47,6 +47,12 @@ import ru.nsu.ccfit.zuev.osu.game.GameScene;
 import ru.nsu.ccfit.zuev.osu.game.mods.GameMod;
 
 public class Replay {
+    /**
+     * The maximum capacity {@link #reserveMovementCapacity(float)} reserves per cursor, so that unusually long
+     * beatmaps do not reserve excessive memory upfront.
+     */
+    public static final int MAX_RESERVED_MOVEMENT_CAPACITY = 1 << 18;
+
     protected int pointsSkipped = 0;
     public ArrayList<MoveArray> cursorMoves = new ArrayList<>();
     public int[] cursorIndex;
@@ -77,6 +83,26 @@ public class Replay {
         for (int i = 0; i < GameScene.CursorCount; i++) {
             cursorIndex[i] = 0;
             lastMoveIndex[i] = -1;
+        }
+    }
+
+    /**
+     * Pre-sizes the movement buffers of the two most used cursors for recording a play of the given duration, so that
+     * they do not need to repeatedly grow (copying an increasingly large array each time) during gameplay.
+     * <p>
+     * The buffers can still grow past the reserved capacity if needed.
+     *
+     * @param durationSeconds The expected duration of the recording, in seconds.
+     */
+    public void reserveMovementCapacity(float durationSeconds) {
+        // Rough lower bounds of recorded points per second after redundant points are skipped. The first cursor is
+        // the one that is held down and moved the most.
+        final int[] pointsPerSecond = {60, 20};
+
+        for (int i = 0; i < pointsPerSecond.length && i < cursorMoves.size(); i++) {
+            long capacity = (long) Math.ceil(Math.max(0, durationSeconds) * pointsPerSecond[i]);
+
+            cursorMoves.get(i).reallocate((int) Math.min(capacity, MAX_RESERVED_MOVEMENT_CAPACITY));
         }
     }
 
@@ -579,31 +605,34 @@ public class Replay {
             return (Utils.sqr(previousMovement.x - tx) + Utils.sqr(previousMovement.y - ty)) <= 25;
         }
 
-        public void pushBack(Replay replay, int time, float x, float y, TouchType touchType) {
-            int idx = size;
-            boolean isNewEntry;
+        public synchronized void pushBack(Replay replay, int time, float x, float y, TouchType touchType) {
+            ReplayMovement movement;
+            boolean appended;
             if (touchType == TouchType.MOVE && checkNewPoint(x, y)) {
-                idx = size - 1;
-                isNewEntry = false;
+                // The previous point is redundant and gets replaced. Its instance can be overwritten
+                // instead of allocating a new one.
+                movement = movements[size - 1];
+                appended = false;
                 replay.pointsSkipped++;
             } else {
                 if (size + 1 >= allocated) {
                     reallocate((allocated * 3) / 2);
                 }
-                isNewEntry = true;
+                movement = new ReplayMovement();
+                appended = true;
             }
-            ReplayMovement movement = new ReplayMovement();
             movement.time = time;
             movement.x = x;
             movement.y = y;
             movement.touchType = touchType;
-            movements[idx] = movement;
-            if (isNewEntry) {
+            if (appended) {
+                // Publish a fully initialized point to the spectator reader.
+                movements[size] = movement;
                 size++;
             }
         }
 
-        public void pushBack(int time, TouchType touchType) {
+        public synchronized void pushBack(int time, TouchType touchType) {
             if (size >= allocated) {
                 reallocate((allocated * 3) / 2);
             }

@@ -17,7 +17,6 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
 import java.io.StringReader;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import android.util.Base64;
 
@@ -30,8 +29,8 @@ import ru.nsu.ccfit.zuev.osu.helper.FileUtils;
 import ru.nsu.ccfit.zuev.osu.helper.MD5Calculator;
 import ru.nsu.ccfit.zuev.osu.online.PostBuilder.RequestException;
 import ru.nsu.ccfit.zuev.osu.scoring.StatisticV2;
-import ru.nsu.ccfit.zuev.osu.security.AttestationState;
-import ru.nsu.ccfit.zuev.osu.security.HardwareAttestationManager;
+import com.osudroid.online.AttestationState;
+import com.osudroid.online.HardwareAttestationManager;
 
 public class OnlineManager {
     private static final String TAG = "OnlineManager";
@@ -156,10 +155,6 @@ public class OnlineManager {
      * can decide whether to accept or reject unattempted attestation based on its policy.
      */
     private void fetchAttestationChallenge() {
-        if (!HardwareAttestationManager.INSTANCE.isSupported()) {
-            Log.w(TAG, "Hardware attestation not supported on this device.");
-            return;
-        }
         try {
             Request request = new Request.Builder()
                     .url(attestationChallengeEndpoint)
@@ -178,7 +173,7 @@ public class OnlineManager {
                     return;
                 }
                 // Decode and store — will be consumed by generateKeyPair() below.
-                AttestationState.INSTANCE.setPendingChallenge(
+                AttestationState.setPendingChallenge(
                         Base64.decode(challengeB64, Base64.DEFAULT));
                 Log.i(TAG, "Attestation challenge received (" + challengeB64.length() + " b64 chars).");
             }
@@ -196,20 +191,20 @@ public class OnlineManager {
      * Failures are non-fatal: login will proceed without attestation parameters.
      */
     private void prepareAttestationKeyPair() {
-        byte[] challenge = AttestationState.INSTANCE.getPendingChallenge();
+        byte[] challenge = AttestationState.getPendingChallenge();
         if (challenge == null) {
             return;
         }
         try {
-            HardwareAttestationManager.INSTANCE.generateKeyPair(challenge);
-            String chain = HardwareAttestationManager.INSTANCE.getAttestationChain();
-            AttestationState.INSTANCE.setAttestationChain(chain);
-            AttestationState.INSTANCE.setPendingChallenge(null); // consumed
+            HardwareAttestationManager.generateKeyPair(challenge);
+            String chain = HardwareAttestationManager.getAttestationChainPem();
+            AttestationState.setAttestationChain(chain);
+            AttestationState.setPendingChallenge(null); // consumed
             Log.i(TAG, "Attestation key pair ready. Chain length: "
                     + (chain != null ? chain.length() : 0) + " chars.");
         } catch (Exception e) {
             Log.e(TAG, "prepareAttestationKeyPair failed: " + e.getMessage(), e);
-            AttestationState.INSTANCE.setPendingChallenge(null);
+            AttestationState.setPendingChallenge(null);
         }
     }
 
@@ -284,10 +279,10 @@ public class OnlineManager {
         // challenge fetch or key generation is needed. This avoids the overhead of key
         // generation on rapid re-logins (e.g. screen-off/on or brief session expiry).
         // After the TTL expires, clear and do a full re-attestation.
-        boolean reusingExistingKey = AttestationState.INSTANCE.isKeyStillValid()
-                && AttestationState.INSTANCE.getAttestationChain() != null;
+        boolean reusingExistingKey = AttestationState.isKeyValid()
+                && AttestationState.getAttestationChain() != null;
         if (!reusingExistingKey) {
-            AttestationState.INSTANCE.clear();
+            AttestationState.clearSession();
             fetchAttestationChallenge();
             prepareAttestationKeyPair();
         } else {
@@ -295,7 +290,7 @@ public class OnlineManager {
         }
         // -----------------------------------------------------------------------
 
-        String chain = AttestationState.INSTANCE.getAttestationChain();
+        String chain = AttestationState.getAttestationChain();
 
         // --- Hardware Attestation: Step 2 — send login with attestation chain ---
         // We use a raw OkHttp call instead of sendRequest() so we can inspect the HTTP
@@ -315,7 +310,6 @@ public class OnlineManager {
                 }
 
                 String bodyStr = httpResponse.body().string();
-                Log.d(TAG, "logIn response body: " + bodyStr);
                 boolean isChallengeExpired = false;
 
                 if (httpCode == 401) {
@@ -359,7 +353,7 @@ public class OnlineManager {
                     }
                 } else {
                     failMessage = "Server error: HTTP " + httpCode;
-                    Log.e(TAG, "logIn unexpected HTTP " + httpCode + ": " + bodyStr);
+                    Log.e(TAG, "logIn unexpected HTTP " + httpCode);
                     return false;
                 }
 
@@ -368,10 +362,10 @@ public class OnlineManager {
                     // restarted, or the key was generated before the challenge flow existed).
                     // Force a full re-attestation cycle and retry the login once.
                     Log.w(TAG, "Challenge expired — clearing state and re-attesting for retry...");
-                    AttestationState.INSTANCE.clear();
+                    AttestationState.clearSession();
                     fetchAttestationChallenge();
                     prepareAttestationKeyPair();
-                    chain = AttestationState.INSTANCE.getAttestationChain();
+                    chain = AttestationState.getAttestationChain();
 
                     if (chain == null) {
                         // Challenge fetch or key generation failed — no point retrying.
@@ -388,7 +382,7 @@ public class OnlineManager {
                 // Either not a challenge expiry, or already retried — treat as failure.
                 failMessage = "Attestation failed";
                 Log.e(TAG, "logIn failed after " + (attempt + 1) + " attempt(s). isChallengeExpired="
-                        + isChallengeExpired + " body=" + bodyStr);
+                        + isChallengeExpired);
                 return false;
 
             } catch (IOException e) {
@@ -427,7 +421,7 @@ public class OnlineManager {
         // now usable for signing score submissions. The server associates the session ID with
         // the leaf public key extracted from the chain.
         if (chain != null) {
-            AttestationState.INSTANCE.setSessionAttestationReady(true);
+            AttestationState.setSessionAttestationReady(true);
             Log.i(TAG, "Session attestation active for userId=" + userId);
         }
         // ----------------------------------------------------------------
@@ -462,11 +456,10 @@ public class OnlineManager {
         // using the public key it stored when the attestation chain was submitted at login.
         // This prevents score injection: an attacker would need the hardware-backed private
         // key, which never leaves the TEE/StrongBox.
-        if (AttestationState.INSTANCE.getSessionAttestationReady()) {
+        if (AttestationState.getSessionAttestationReady()) {
             try {
                 String sigPayload = userId + "|" + beatmap.getMD5() + "|" + scoreData;
-                String sig = HardwareAttestationManager.INSTANCE.signData(
-                        sigPayload.getBytes(StandardCharsets.UTF_8));
+                String sig = HardwareAttestationManager.signToBase64(sigPayload);
                 if (sig != null) {
                     post.addParam("attestationSignature", sig);
                     Log.i(TAG, "Attestation signature attached to score submission.");

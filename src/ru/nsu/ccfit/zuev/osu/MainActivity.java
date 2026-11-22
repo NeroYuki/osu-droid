@@ -40,6 +40,8 @@ import androidx.preference.PreferenceManager;
 
 import com.edlplan.ui.ActivityOverlay;
 import com.osudroid.BuildSettings;
+import com.osudroid.beatmaplisting.BeatmapLink;
+import com.osudroid.beatmaplisting.BeatmapListing;
 import com.osudroid.beatmaps.BeatmapCache;
 import com.osudroid.data.DatabaseManager;
 import com.osudroid.debug.DebugPlaygroundScene;
@@ -86,6 +88,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import okio.Okio;
 import ru.nsu.ccfit.zuev.audio.Status;
@@ -107,12 +110,19 @@ public class MainActivity extends BaseGameActivity implements
     private String fileToAdd = null;
     private Uri contentUriToAdd = null;
     private SaveServiceObject saveServiceObject;
+    /** Held while an activity instance loads the game, see onLoadComplete. */
+    private static final Object LOAD_LOCK = new Object();
     private boolean willReplay = false;
     private static boolean activityVisible = true;
     private static final ScheduledExecutorService scheduledExecutor = Executors.newSingleThreadScheduledExecutor();
     private ScheduledFuture<?> logFlushFuture;
     private Display display;
     private DisplayManager.DisplayListener displayListener;
+    /**
+     * The maximum limit of the update rate, regardless of the frame limiter setting.
+     */
+    private static final float MAXIMUM_UPDATE_HZ = 1000;
+
     private float currentRefreshRate = 60;
     private float maxRefreshRate = 60;
     private int maxRefreshRateModeId = 0;
@@ -120,6 +130,9 @@ public class MainActivity extends BaseGameActivity implements
 
     // Multiplayer
     private Uri roomInviteLink;
+
+    private final AtomicReference<BeatmapLink> pendingBeatmapLink = new AtomicReference<>();
+    private volatile boolean startupFinished;
 
     @Override
     public Engine onLoadEngine() {
@@ -150,6 +163,9 @@ public class MainActivity extends BaseGameActivity implements
             public void onDisplayChanged(int displayId) {
                 if (displayId == display.getDisplayId()) {
                     currentRefreshRate = display.getRefreshRate();
+
+                    // Refresh-rate multiples of the frame limiter depend on the current refresh rate.
+                    applyFrameLimiterSetting(Config.getFrameLimiter());
                 }
             }
         };
@@ -316,49 +332,65 @@ public class MainActivity extends BaseGameActivity implements
     @Override
     public void onLoadComplete() {
         Execution.async(() -> {
-            GlobalManager.getInstance().init();
-            Execution.updateThread(() -> UIEngine.getCurrent().getOverlay().attachChild(new FPSCounter()));
-            GlobalManager.getInstance().setLoadingProgress(50);
-            checkNewSkins();
-            Config.loadSkins();
-            DifficultyCalculationManager.checkForOutdatedStarRatings();
-            loadBeatmapLibrary();
-
-            SplashScene.INSTANCE.playWelcomeAnimation();
-
-            Execution.delayed(2500, () -> {
-
-                UpdateManager.onActivityStart();
-                DatabaseManager.notifyIfResetDueToDowngrade();
-                GlobalManager.getInstance().setInfo("");
-                GlobalManager.getInstance().setLoadingProgress(100);
-                ResourceManager.getInstance().loadFont("font", null, 28, Color.WHITE);
-
-                if (!BuildSettings.DEBUG_PLAYGROUND) {
-                    GlobalManager.getInstance().getEngine().setScene(GlobalManager.getInstance().getMainScene().getScene());
+            // The loads of two activity instances (e.g. one recreated while the other still loads) would run on
+            // the same singletons at once, so they run one after the other. One whose activity is already gone is
+            // skipped, the newer instance loads anyway.
+            synchronized (LOAD_LOCK) {
+                if (isFinishing() || isDestroyed()) {
+                    return;
                 }
 
-                GlobalManager.getInstance().getMainScene().loadBeatmap();
-                initPreferences();
-                availableInternalMemory();
-                applyRefreshRateSetting(Config.isForceMaxRefreshRate());
+                GlobalManager.getInstance().init();
+                Execution.updateThread(() -> UIEngine.getCurrent().getOverlay().attachChild(new FPSCounter()));
+                GlobalManager.getInstance().setLoadingProgress(50);
+                checkNewSkins();
+                Config.loadSkins();
+                DifficultyCalculationManager.checkForOutdatedStarRatings();
+                loadBeatmapLibrary();
 
-                AccessibilityDetector.register(MainActivity.this);
+                SplashScene.INSTANCE.playWelcomeAnimation();
 
-                logFlushFuture = scheduledExecutor.scheduleAtFixedRate(Multiplayer::flushLog, 0, 5, TimeUnit.SECONDS);
+                Execution.delayed(2500, () -> {
+                    // Replaced by a newer activity instance in the meantime, which shows the menu itself.
+                    if (isFinishing() || isDestroyed()) {
+                        return;
+                    }
 
-                if (roomInviteLink != null) {
-                    final Uri inviteLink = roomInviteLink;
-                    roomInviteLink = null;
-                    Multiplayer.connectFromLink(inviteLink);
-                } else if (willReplay) {
-                    GlobalManager.getInstance().getMainScene().watchReplay(fileToAdd);
-                    fileToAdd = null;
-                    willReplay = false;
-                }
+                    UpdateManager.onActivityStart();
+                    DatabaseManager.notifyIfResetDueToDowngrade();
+                    GlobalManager.getInstance().setInfo("");
+                    GlobalManager.getInstance().setLoadingProgress(100);
+                    ResourceManager.getInstance().loadFont("font", null, 28, Color.WHITE);
 
-                GlobalManager.getInstance().getMainScene().loadBannerSprite();
-            });
+                    if (!BuildSettings.DEBUG_PLAYGROUND) {
+                        GlobalManager.getInstance().getEngine().setScene(GlobalManager.getInstance().getMainScene().getScene());
+                    }
+
+                    GlobalManager.getInstance().getMainScene().loadBeatmap();
+                    initPreferences();
+                    availableInternalMemory();
+                    applyRefreshRateSetting(Config.isForceMaxRefreshRate());
+
+                    AccessibilityDetector.register(MainActivity.this);
+
+                    logFlushFuture = scheduledExecutor.scheduleAtFixedRate(Multiplayer::flushLog, 0, 5, TimeUnit.SECONDS);
+
+                    if (roomInviteLink != null) {
+                        final Uri inviteLink = roomInviteLink;
+                        roomInviteLink = null;
+                        Multiplayer.connectFromLink(inviteLink);
+                    } else if (willReplay) {
+                        GlobalManager.getInstance().getMainScene().watchReplay(fileToAdd);
+                        fileToAdd = null;
+                        willReplay = false;
+                    }
+
+                    startupFinished = true;
+                    openPendingBeatmapLink();
+
+                    GlobalManager.getInstance().getMainScene().loadBannerSprite();
+                });
+            }
         });
     }
 
@@ -389,6 +421,7 @@ public class MainActivity extends BaseGameActivity implements
         this.mRenderSurfaceView.setEGLConfigChooser(8, 8, 8, 8, 24, 0);
         this.mRenderSurfaceView.getHolder().setFormat(PixelFormat.RGB_888);
         this.mRenderSurfaceView.setRenderer(this.mEngine);
+        applyFrameLimiterSetting(Config.getFrameLimiter());
 
         RelativeLayout mainLayout = new RelativeLayout(this);
         mainLayout.setBackgroundColor(Color.BLACK);
@@ -693,6 +726,9 @@ public class MainActivity extends BaseGameActivity implements
         super.onNewIntent(intent);
         setIntent(intent);
 
+        // Determined before parsing, as parsing consumes the intent.
+        boolean isBeatmapLink = isBeatmapLinkIntent(intent);
+
         if (parseIntent(intent)) {
             var globalManager = GlobalManager.getInstance();
 
@@ -712,6 +748,15 @@ public class MainActivity extends BaseGameActivity implements
                     Multiplayer.connectFromLink(roomInviteLink);
                     roomInviteLink = null;
                 });
+
+                return;
+            }
+
+            if (isBeatmapLink) {
+                // Before startup has finished, the link stays pending for the startup operation to consume.
+                if (startupFinished) {
+                    openPendingBeatmapLink();
+                }
 
                 return;
             }
@@ -781,6 +826,11 @@ public class MainActivity extends BaseGameActivity implements
         if (gameScene != null && mEngine.getScene() == gameScene.getScene()) {
             if (Multiplayer.isMultiplayer) {
                 ToastLogger.showText("You've left the match.", true);
+
+                // The engine is stopped by now, so the quit below only runs once
+                // the app is back in the foreground. Leave the round right away
+                // so that the server is not left waiting for this player's score.
+                gameScene.leaveMultiplayerRound();
                 Execution.updateThread(gameScene::quit);
                 Multiplayer.log("Player left the match.");
             } else {
@@ -1065,6 +1115,40 @@ public class MainActivity extends BaseGameActivity implements
         });
     }
 
+    /**
+     * Applies a frame limiter setting to the render surface and the update clock.
+     *
+     * @param frameLimiter A value returned by {@link Config#getFrameLimiter()}.
+     */
+    public void applyFrameLimiterSetting(int frameLimiter) {
+        boolean lowLatency = frameLimiter == Config.FRAME_LIMITER_VSYNC_LOW_LATENCY;
+        boolean vsync = lowLatency || frameLimiter == Config.FRAME_LIMITER_VSYNC;
+
+        // Every frame gets a presentation time, and with vertical sync on, a Choreographer callback paces the loop
+        // instead of the swap interval. The next update only starts after that wait, so it samples input as late as
+        // possible.
+        if (mRenderSurfaceView != null) {
+            mRenderSurfaceView.setVSyncEnabled(vsync);
+            mRenderSurfaceView.setPresentationTimeEnabled(frameLimiter != Config.FRAME_LIMITER_VSYNC);
+            mRenderSurfaceView.setChoreographerPacingEnabled(lowLatency);
+        }
+
+        if (mEngine != null) {
+            mEngine.setReleaseUpdateAfterSwap(lowLatency);
+        }
+
+        // With vertical sync on, the display paces the loop and the hard limit is never reached, which keeps the
+        // previous behavior intact. Without it, the clock is the only thing pacing the loop.
+        float maximumUpdateHz = vsync || frameLimiter == Config.FRAME_LIMITER_UNLIMITED
+            ? MAXIMUM_UPDATE_HZ
+            : Math.min(currentRefreshRate * frameLimiter, MAXIMUM_UPDATE_HZ);
+
+        if (mEngine instanceof UIEngine uiEngine) {
+            // The clock is read on the update thread, so change it there.
+            uiEngine.runOnUpdateThread(() -> uiEngine.getClock().setMaximumUpdateHz(maximumUpdateHz));
+        }
+    }
+
     private boolean checkPermissions() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
                 Environment.isExternalStorageManager()) {
@@ -1103,13 +1187,61 @@ public class MainActivity extends BaseGameActivity implements
         }
     }
 
+    private void openPendingBeatmapLink() {
+        Execution.updateThread(() -> {
+            var link = pendingBeatmapLink.getAndSet(null);
+
+            if (link == null) {
+                return;
+            }
+
+            if (mEngine != null) {
+                var scene = mEngine.getScene();
+                var gameScene = GlobalManager.getInstance().getGameScene();
+
+                if (scene instanceof GameLoaderScene
+                        || (scene != null && gameScene != null && scene == gameScene.getScene())) {
+                    ToastLogger.showText("Beatmap links cannot be opened during gameplay.", true);
+                    return;
+                }
+            }
+
+            new BeatmapListing(link).show();
+        });
+    }
+
+    private boolean isBeatmapLinkIntent(Intent intent) {
+        if (intent == null || !Intent.ACTION_VIEW.equals(intent.getAction())) {
+            return false;
+        }
+
+        Uri data = intent.getData();
+        return data != null && BeatmapLink.parse(data.toString()) != null;
+    }
+
+    /**
+     * Parses an incoming intent and stores whatever it carries (invite link,
+     * beatmap link or file to import).
+     *
+     * @return Whether the intent carried something to handle. Malformed
+     * {@code osu://} links carry nothing and are ignored.
+     */
     private boolean parseIntent(Intent intent) {
         if (intent != null && Intent.ACTION_VIEW.equals(intent.getAction())) {
             Uri data = intent.getData();
 
             if (data != null) {
-                if (data.toString().startsWith(LobbyAPI.INVITE_HOST)) {
+                var beatmapLink = BeatmapLink.parse(data.toString());
+
+                if (beatmapLink != null) {
+                    pendingBeatmapLink.set(beatmapLink);
+                } else if (data.toString().startsWith(LobbyAPI.INVITE_HOST)) {
                     roomInviteLink = data;
+                } else if ("osu".equalsIgnoreCase(data.getScheme())) {
+                    // Malformed beatmap link
+                    // Ignore it, but consume the action so it isn't handled again.
+                    intent.setAction(Intent.ACTION_MAIN);
+                    return false;
                 } else {
                     String scheme = data.getScheme();
                     if (ContentResolver.SCHEME_FILE.equals(scheme)) {
