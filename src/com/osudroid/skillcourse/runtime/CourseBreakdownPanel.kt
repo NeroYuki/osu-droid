@@ -23,6 +23,15 @@ import ru.nsu.ccfit.zuev.osu.scoring.ScoreNumber
 import java.util.Locale
 import kotlin.math.min
 
+private const val MAX_GRADE_HEIGHT = 180f
+private const val GRADE_GAP = 4f
+private const val PARTIAL_LABEL_HEIGHT = 22f
+private const val PARTIAL_LABEL_GAP = 4f
+private const val MOD_ICON_CELL = 40f
+private const val MOD_ICON_SIZE = 34f
+private const val MOD_ICON_GAP = 6f
+private const val NO_MODS_HEIGHT = 22f
+
 /**
  * Read-only native component browser.
  *
@@ -424,24 +433,33 @@ internal class CourseBreakdownPanel(
         val grade = component.nativeGrade()
         val hasJudgments = component.hit300 + component.hit100 + component.hit50 + component.misses > 0
         val gradeTexture = resource.getTexture("ranking-$grade")
-        val gradeWidth = min(right.width * 0.72f, 190f)
-        val gradeHeight = 90f
+
+        // Reserve the optional partial label and every wrapped mod row before sizing the grade.
+        // The grade uses the whole right column width and as much of its height as those rows
+        // leave, so the panel content always stays above the shared footer.
+        val mods = component.modsOrEmpty().values.filter { it.isUserPlayable }
+        val modColumns = (right.width / MOD_ICON_CELL).toInt().coerceAtLeast(1)
+        val modRows = if (mods.isEmpty()) 0 else (mods.size + modColumns - 1) / modColumns
+        val modsHeight = if (mods.isEmpty()) NO_MODS_HEIGHT else modRows * MOD_ICON_CELL
+        val partialHeight = if (page.isPartial) PARTIAL_LABEL_HEIGHT + PARTIAL_LABEL_GAP else 0f
+        val gradeHeight = (right.height - partialHeight - modsHeight - GRADE_GAP)
+            .coerceIn(0f, MAX_GRADE_HEIGHT)
 
         if ((hasJudgments || component.completed) && gradeTexture.width > 0 && gradeTexture.height > 0) {
             right.attachChild(UISprite().apply {
                 textureRegion = gradeTexture
-                x = (right.width - gradeWidth) / 2f
+                x = 0f
                 y = 0f
-                width = gradeWidth
+                width = right.width
                 height = gradeHeight
                 scaleType = ScaleType.Fit
             })
         } else {
             right.attachChild(UIText().apply {
                 x = 0f
-                y = 8f
+                y = 0f
                 width = right.width
-                height = 60f
+                height = gradeHeight
                 alignment = Anchor.Center
                 font = resource.getFont("CaptionFont")
                 text = if (hasJudgments || component.completed) grade else "—"
@@ -449,49 +467,47 @@ internal class CourseBreakdownPanel(
             })
         }
 
-        var rowY = gradeHeight + 4f
+        var rowY = gradeHeight + GRADE_GAP
         if (page.isPartial) {
             right.attachChild(UIText().apply {
                 x = 0f
                 y = rowY
                 width = right.width
-                height = 22f
+                height = PARTIAL_LABEL_HEIGHT
                 alignment = Anchor.Center
                 font = resource.getFont("smallFont")
                 text = "Partial result"
                 color = Color4(1f, 0.65f, 0.35f)
             })
-            rowY += 26f
+            rowY += PARTIAL_LABEL_HEIGHT + PARTIAL_LABEL_GAP
         }
 
-        val mods = component.modsOrEmpty().values.filter { it.isUserPlayable }
         val modRow = UIContainer().apply {
             x = 0f
             y = rowY
             width = right.width
-            height = 36f
+            height = modsHeight
         }
         if (mods.isEmpty()) {
             modRow.attachChild(UIText().apply {
                 width = right.width
-                height = 22f
+                height = NO_MODS_HEIGHT
                 alignment = Anchor.Center
                 font = resource.getFont("smallFont")
                 text = "No mods"
                 color = Color4(1f, 1f, 1f, 0.55f)
             })
         } else {
-            val rows = mods.chunked((right.width / 40f).toInt().coerceAtLeast(1))
-            modRow.height = rows.size * 40f
+            val rows = mods.chunked(modColumns)
             for ((rowIndex, rowMods) in rows.withIndex()) {
-                val totalWidth = rowMods.size * 34f + (rowMods.size - 1) * 6f
+                val totalWidth = rowMods.size * MOD_ICON_SIZE + (rowMods.size - 1) * MOD_ICON_GAP
                 val startX = ((right.width - totalWidth) / 2f).coerceAtLeast(0f)
                 for ((column, mod) in rowMods.withIndex()) {
                     modRow.attachChild(ModIcon(mod).apply {
-                        x = startX + column * 40f
-                        y = rowIndex * 40f
-                        width = 34f
-                        height = 34f
+                        x = startX + column * MOD_ICON_CELL
+                        y = rowIndex * MOD_ICON_CELL
+                        width = MOD_ICON_SIZE
+                        height = MOD_ICON_SIZE
                     })
                 }
             }

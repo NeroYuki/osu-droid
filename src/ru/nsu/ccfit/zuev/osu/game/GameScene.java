@@ -221,6 +221,7 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
     private ModHashMap lastMods;
 
     private final AtomicInteger loadingRequestId = new AtomicInteger(0);
+    private volatile long backgroundRequestId;
     private CompletableFuture<?> loadingPipeline;
     private Job gameLoadingJob;
 
@@ -361,7 +362,7 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
         oldScene = oscene;
     }
 
-    private void loadBackground() {
+    private void loadBackground(BeatmapInfo beatmapInfo, long backgroundRequest) {
         if (dimRectangle != null) {
             dimRectangle.detachSelf();
             dimRectangle = null;
@@ -381,9 +382,10 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
             return;
         }
 
-        TextureRegion textureRegion = Config.isSafeBeatmapBg() || playableBeatmap.getEvents().backgroundFilename == null
-                ? ResourceManager.getInstance().getTexture("menu-background")
-                : ResourceManager.getInstance().getTextureIfLoaded("::background");
+        String filename = playableBeatmap.getEvents().backgroundFilename;
+        String path = Config.isSafeBeatmapBg() || filename == null
+                ? null : new File(beatmapInfo.getAbsoluteSetDirectory(), filename).getPath();
+        TextureRegion textureRegion = ResourceManager.getInstance().loadBackground(path, engine, backgroundRequest);
 
         if (textureRegion == null) {
             Rectangle rectangle = new Rectangle(0f, 0f, Config.getRES_WIDTH(), Config.getRES_HEIGHT());
@@ -630,6 +632,13 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
     }
 
     private boolean loadGame(final BeatmapInfo beatmapInfo, final String rFile, final ModHashMap mods, @Nullable CoroutineScope scope) {
+        long request = ResourceManager.getInstance().beginBackgroundRequest();
+        backgroundRequestId = request;
+        return loadGame(beatmapInfo, rFile, mods, scope, request);
+    }
+
+    private boolean loadGame(final BeatmapInfo beatmapInfo, final String rFile, final ModHashMap mods,
+                             @Nullable CoroutineScope scope, long backgroundRequest) {
         if (scope != null) {
             ensureActive(scope.getCoroutineContext());
         }
@@ -736,7 +745,7 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
         }
 
         // Load backgrounds early to minimize waiting time.
-        loadBackground();
+        loadBackground(beatmapInfo, backgroundRequest);
         loadStoryboard(beatmapInfo);
         loadVideo(beatmapInfo);
 
@@ -1082,6 +1091,8 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
 
         final String rfile = beatmapInfo != null ? replayFile : this.replayFilePath;
         final int requestId = loadingRequestId.incrementAndGet();
+        final long backgroundRequest = ResourceManager.getInstance().beginBackgroundRequest();
+        backgroundRequestId = backgroundRequest;
 
         BeatmapInfo beatmapToUse = beatmapInfo != null ? beatmapInfo : lastBeatmapInfo;
         boolean isRestart = beatmapInfo == null && replayFile == null && mods == null;
@@ -1115,7 +1126,7 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
                                 return;
                             }
 
-                            succeeded = loadGame(beatmapToUse, rfile, modsToUse, scope);
+                            succeeded = loadGame(beatmapToUse, rfile, modsToUse, scope, backgroundRequest);
 
                             if (succeeded && requestId == loadingRequestId.get()) {
                                 prepareScene();
@@ -1159,6 +1170,7 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
     private CompletableFuture<Unit> cancelLoading(boolean invalidatePendingStart) {
         if (invalidatePendingStart) {
             loadingRequestId.incrementAndGet();
+            ResourceManager.getInstance().cancelBackgroundRequest(backgroundRequestId);
             isReadyToStart = false;
         }
 

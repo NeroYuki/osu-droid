@@ -1,17 +1,17 @@
 package com.osudroid.skillcourse.runtime
 
-import android.util.Log
 import com.osudroid.data.BeatmapInfo
 import com.osudroid.data.BeatmapSetInfo
 import com.osudroid.data.SkillCourseEntity
 import com.osudroid.skillcourse.CourseDefinition
+import com.osudroid.skillcourse.CourseCodec
 import com.osudroid.skillcourse.CourseMap
 import com.osudroid.skillcourse.CourseModPolicy
 import com.osudroid.skillcourse.CourseRepository
-import com.osudroid.skillcourse.recovery.CourseAvailabilityScanner
+import com.osudroid.skillcourse.recovery.CourseAvailabilityCache
+import com.osudroid.skillcourse.recovery.CourseAvailabilityListener
 import com.osudroid.skillcourse.recovery.CourseAvailabilitySnapshot
 import com.osudroid.skillcourse.recovery.CourseLibraryEvents
-import com.osudroid.skillcourse.recovery.CourseLibraryListener
 import com.osudroid.skillcourse.recovery.CourseMapStatus
 import com.osudroid.ui.v2.modmenu.ModMenu
 import com.osudroid.utils.ModHashMap
@@ -28,6 +28,35 @@ internal data class CourseViewProjection(
     val mapByInstalledHash: Map<String, CourseMap>,
     val outdated: Set<String>,
 )
+
+/**
+ * An immutable snapshot of the active course view.
+ *
+ * The project is frozen when the view is entered and replaced only by a newer availability
+ * snapshot. [generation] changes on every enter/exit so asynchronous boards can reject work that
+ * belongs to a previous view.
+ */
+data class CourseViewState(
+    val courseId: String,
+    val courseHash: String,
+    val definition: CourseDefinition,
+    val mapByInstalledHash: Map<String, CourseMap>,
+    val outdated: Set<String>,
+    val generation: Long
+) {
+    /** Returns the authored identity for an installed map hash, if it is visible in this view. */
+    fun authoredMapFor(installedHash: String?): CourseMap? =
+        installedHash?.let { mapByInstalledHash[it] }
+
+    /** Returns the authored index for an installed map hash, if it is visible in this view. */
+    fun authoredIndexFor(installedHash: String?): Int? {
+        val authored = authoredMapFor(installedHash) ?: return null
+        return definition.maps.indexOfFirst { it.mapHash == authored.mapHash }.takeIf { it >= 0 }
+    }
+
+    fun isOutdated(installedHash: String?): Boolean =
+        installedHash != null && installedHash in outdated
+}
 
 /**
  * Projects one availability snapshot into song-menu identities.
@@ -62,13 +91,14 @@ internal fun projectCourseView(snapshot: CourseAvailabilitySnapshot): CourseView
 /**
  * A temporary library projection; no missing entry is removed from the saved course.
  *
- * While active the view subscribes to [CourseLibraryEvents]. Availability is always rebuilt from a
- * fresh snapshot, and the view only publishes it when the snapshot still belongs to the current
- * view token and library generation. A late enter or rescan therefore cannot resurrect a view that
- * the player has already exited.
+ * While active the view observes [CourseAvailabilityCache]. Opening the view never scans files.
+ * Cached projections are published only for the current view token and library generation, so
+ * delayed cache work cannot resurrect a view that the player has already exited.
  */
 object CourseView {
     private data class Context(
+        val courseId: String,
+        val courseHash: String,
         val definition: CourseDefinition,
         val mapByInstalledHash: Map<String, CourseMap>,
         val outdated: Set<String>,
@@ -84,10 +114,34 @@ object CourseView {
     /** Coalesces overlapping import-triggered rescans; only the newest one may publish. */
     private val rescanSequence = AtomicLong(0)
 
-    /** [CourseLibraryEvents] keeps only weak listener references, so the view holds it strongly. */
-    @Volatile private var libraryListener: CourseLibraryListener? = null
+    @Volatile private var availabilityListener: CourseAvailabilityListener? = null
 
     @JvmStatic fun isActive() = context != null
+
+    /** Immutable identity of the active course view, or null after exit. */
+    @JvmStatic fun activeState(): CourseViewState? {
+        val current = context ?: return null
+        return CourseViewState(
+            courseId = current.courseId,
+            courseHash = current.courseHash,
+            definition = current.definition,
+            mapByInstalledHash = current.mapByInstalledHash,
+            outdated = current.outdated,
+            generation = generation.get()
+        )
+    }
+
+    @JvmStatic fun activeCourseId(): String? = context?.courseId
+    @JvmStatic fun activeCourseHash(): String? = context?.courseHash
+    @JvmStatic fun activeDefinition(): CourseDefinition? = context?.definition
+    @JvmStatic fun activeGeneration(): Long = generation.get()
+
+    /** Authored map identity for the installed hash selected in the course view. */
+    @JvmStatic fun activeAuthoredMap(installedHash: String?): CourseMap? =
+        activeState()?.authoredMapFor(installedHash)
+
+    @JvmStatic fun activeAuthoredIndex(installedHash: String?): Int? =
+        activeState()?.authoredIndexFor(installedHash)
 
     @JvmStatic fun cancelPendingEnter() {
         generation.incrementAndGet()
@@ -100,8 +154,8 @@ object CourseView {
 
         async {
             try {
-                val definition = checkNotNull(CourseRepository.getCourse(entity.id))
-                val snapshot = CourseAvailabilityScanner.scan(definition)
+                val currentEntity = checkNotNull(CourseRepository.getEntity(entity.id))
+                val definition = CourseCodec.decode(currentEntity.definitionJson, allowDraft = true)
                 updateThread {
                     val global = GlobalManager.getInstance()
                     if (token != generation.get() || CourseRuntime.isBusy() || global.engine.scene !== global.songMenu.scene) {
@@ -109,17 +163,15 @@ object CourseView {
                     }
 
                     val previous = context?.previousMods ?: ModMenu.enabledMods.deepCopy()
-                    publish(snapshot, definition, previous)
-                    installLibraryListener()
+                    publish(cachedSnapshot(currentEntity.courseHash), currentEntity, definition, previous)
+                    installAvailabilityListener()
                     global.songMenu.enterCourseView()
                     context?.mapByInstalledHash?.keys?.firstNotNullOfOrNull {
                         LibraryManager.findBeatmapByMD5(it)
                     }?.let { global.songMenu.selectBeatmap(it, false) }
 
-                    // The import may have committed between the scan and listener installation.
-                    if (snapshot.libraryRevision < CourseLibraryEvents.revision) {
-                        scheduleRescan()
-                    }
+                    // Close the gap between reading the cache and installing the observer.
+                    refreshCachedProjection()
                 }
             } catch (e: Exception) {
                 ToastLogger.showText("Unable to view the course: ${e.message}", true)
@@ -158,7 +210,7 @@ object CourseView {
         val previous = context
         context = null
         lastAppliedHash = null
-        removeLibraryListener()
+        removeAvailabilityListener()
 
         if (previous == null) {
             return
@@ -170,9 +222,16 @@ object CourseView {
     }
 
     /** Must run on the engine update thread. */
-    private fun publish(snapshot: CourseAvailabilitySnapshot, definition: CourseDefinition, previousMods: ModHashMap) {
+    private fun publish(
+        snapshot: CourseAvailabilitySnapshot,
+        entity: SkillCourseEntity,
+        definition: CourseDefinition,
+        previousMods: ModHashMap
+    ) {
         val projection = projectCourseView(snapshot)
         context = Context(
+            courseId = entity.id,
+            courseHash = entity.courseHash,
             definition = definition,
             mapByInstalledHash = projection.mapByInstalledHash,
             outdated = projection.outdated,
@@ -182,71 +241,44 @@ object CourseView {
     }
 
     @Synchronized
-    private fun installLibraryListener() {
-        if (libraryListener != null) {
+    private fun installAvailabilityListener() {
+        if (availabilityListener != null) {
             return
         }
-        val listener = CourseLibraryListener { onLibraryImportCompleted() }
-        libraryListener = listener
-        CourseLibraryEvents.addListener(listener)
+        val listener = CourseAvailabilityListener { hash ->
+            if (hash == null || hash == context?.courseHash) refreshCachedProjection()
+        }
+        availabilityListener = listener
+        CourseAvailabilityCache.addListener(listener)
     }
 
     @Synchronized
-    private fun removeLibraryListener() {
-        val listener = libraryListener ?: return
-        libraryListener = null
-        CourseLibraryEvents.removeListener(listener)
+    private fun removeAvailabilityListener() {
+        val listener = availabilityListener ?: return
+        availabilityListener = null
+        CourseAvailabilityCache.removeListener(listener)
     }
 
-    private fun onLibraryImportCompleted() {
-        if (context == null) {
-            return
-        }
-        scheduleRescan()
-    }
+    private fun cachedSnapshot(hash: String): CourseAvailabilitySnapshot =
+        CourseAvailabilityCache.get(hash).snapshot
+            ?: CourseAvailabilitySnapshot(emptyList(), false, emptyList(), CourseLibraryEvents.revision)
 
-    private fun scheduleRescan() {
+    private fun refreshCachedProjection() {
         val token = generation.get()
         val request = rescanSequence.incrementAndGet()
-
-        async {
-            try {
-                if (!isCurrent(token, request)) {
-                    return@async
-                }
-
-                val active = context ?: return@async
-                val snapshot = CourseAvailabilityScanner.scan(active.definition)
-                if (snapshot.libraryRevision < CourseLibraryEvents.revision) {
-                    // A newer import committed while scanning. Let the newest event publish instead
-                    // of applying a snapshot from an obsolete library generation.
-                    if (isCurrent(token, request)) {
-                        scheduleRescan()
-                    }
-                    return@async
-                }
-
-                updateThread {
-                    if (!isCurrent(token, request)) {
-                        return@updateThread
-                    }
-                    if (snapshot.libraryRevision < CourseLibraryEvents.revision) {
-                        scheduleRescan()
-                        return@updateThread
-                    }
-
-                    val current = context ?: return@updateThread
-                    val projection = projectCourseView(snapshot)
-                    context = current.copy(
-                        mapByInstalledHash = projection.mapByInstalledHash,
-                        outdated = projection.outdated
-                    )
-                    refreshCourseViewIfVisible()
-                }
-            } catch (e: Exception) {
-                // A failed rescan keeps the previous projection; the next import retries it.
-                Log.e("SkillCourse", "Unable to refresh the course view", e)
+        updateThread {
+            if (!isCurrent(token, request)) return@updateThread
+            val current = context ?: return@updateThread
+            val projection = projectCourseView(cachedSnapshot(current.courseHash))
+            if (projection.mapByInstalledHash == current.mapByInstalledHash && projection.outdated == current.outdated) {
+                return@updateThread
             }
+            context = current.copy(
+                mapByInstalledHash = projection.mapByInstalledHash,
+                outdated = projection.outdated
+            )
+            lastAppliedHash = null
+            refreshCourseViewIfVisible()
         }
     }
 

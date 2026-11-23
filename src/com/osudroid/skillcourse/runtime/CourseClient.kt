@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Log
+import com.osudroid.skillcourse.recovery.CourseAvailabilityCache
 import com.osudroid.skillcourse.ui.CourseUi
 import com.osudroid.skillcourse.CourseRepository
 import com.osudroid.utils.async
@@ -55,6 +56,7 @@ object CourseClient {
         }
         CourseUi.onHistory = { CourseResults.history(it) }
         CourseRuntime.onResult = { CourseResults.show(it) }
+        CourseAvailabilityCache.initialize()
         async {
             try {
                 val report = CourseAttemptStore.recover()

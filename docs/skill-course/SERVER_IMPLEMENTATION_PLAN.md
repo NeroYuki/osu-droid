@@ -8,6 +8,12 @@ The [shared contract](SHARED_CONTRACT.md) defines the proposed v1 file and gamep
 
 This work starts at client milestone C6. C1 through C5 deliver a fully functional offline MVP accepted with AVDs, including missing/outdated detection and sequential map recovery through the game's existing mirrors. They require no server deployment, official lookup, course submission, global course leaderboard or physical-device gate. C6 has two distinct completion gates: server changes/staging integration and real-device ADB end-to-end validation. Shared fixture design can precede C6, but executing the TypeScript/backend tests is not a prerequisite for C5 acceptance.
 
+## Additional deferred leaderboard requirement
+
+Confirmed during the post-MVP client revision: ordinary beatmap Online PP is deferred to the server phase too. The inspected `src/routes/getLeaderboard.ts` returns native score/combo/rank/mods/accuracy/avatar fields, without PP values or a PP-ranking mode. The client now cycles through an honest unavailable state for Online PP; it makes no invented PP request and never relabels native score as PP. Course view uses local component and total boards until the course global API exists.
+
+Before enabling ordinary Online PP, define and test an explicit versioned response/ranking contract with authoritative PP values and eligibility rules. Preserve the existing score response for older clients. The exact API design and PP computation/storage policy remain server-phase decisions; no backend source or deployment was changed by the client refinements.
+
 ## Inspected backend
 
 | Existing source | Observed behavior and consequence |

@@ -8,6 +8,7 @@ import com.reco1l.andengine.component.*
 import com.reco1l.andengine.text.UIText
 import com.reco1l.andengine.ui.UITextButton
 import com.reco1l.framework.Color4
+import com.reco1l.framework.math.Vec4
 import org.anddev.andengine.entity.primitive.Rectangle
 import org.anddev.andengine.entity.scene.background.SpriteBackground
 import org.anddev.andengine.entity.sprite.Sprite
@@ -18,6 +19,7 @@ import ru.nsu.ccfit.zuev.osu.Config
 import ru.nsu.ccfit.zuev.osu.ResourceManager
 import ru.nsu.ccfit.zuev.osu.Utils
 import ru.nsu.ccfit.zuev.osu.scoring.ScoreNumber
+import ru.nsu.ccfit.zuev.skins.OsuSkin
 
 /** Actions owned by [CourseResults]; the presenter itself never persists or submits anything. */
 internal class CourseResultActions(
@@ -148,9 +150,11 @@ internal object CourseResultPresenter {
         scoreNumber(260f, accuracyLabel.y + 38f, formatAccuracy(aggregate.accuracy))
 
         val rankingTexture = resources.getTexture("ranking-title")
+        val viewportWidth = Config.getRES_WIDTH().toFloat()
+        val viewportHeight = Config.getRES_HEIGHT().toFloat()
         scene.attachChild(
             Sprite(
-                Config.getRES_WIDTH() * 5f / 6f - rankingTexture.width / 2f,
+                viewportWidth * 5f / 6f - rankingTexture.width / 2f,
                 0f,
                 rankingTexture
             )
@@ -158,15 +162,62 @@ internal object CourseResultPresenter {
 
         attachMetadata(scene, result)
 
+        // The verdict is viewport-owned. Custom skins may supply a full-screen (even fully
+        // transparent) ranking-title canvas, so its texture height must never act as a lower
+        // bound that can push the native course text off screen.
+        val statusWidth = (viewportWidth * 0.30f)
+            .coerceAtMost(viewportWidth - 16f)
+            .coerceAtLeast(1f)
+        val statusHeight = VERDICT_HEIGHT + VERDICT_SPACING + MAPS_HEIGHT
+        val statusX = (viewportWidth * 5f / 6f - statusWidth / 2f)
+            .coerceIn(8f, (viewportWidth - statusWidth - 8f).coerceAtLeast(8f))
+
+        // The native combo/accuracy numbers keep their original row. Reserve a fresh bottom-left
+        // row beneath them for the compact Breakdown action instead of reusing the right column.
+        val actionX = 20f
+        val actionHeight = 40f
+        val breakdownWidth = 180f
+        val statNumbersBottom = scaledContainer.y + nativeStatsBottom(resources) + 8f
+        val bottomRowY = viewportHeight - 12f - actionHeight
+        val actionY = maxOf(bottomRowY, statNumbersBottom)
+            .coerceAtMost((viewportHeight - 4f - actionHeight).coerceAtLeast(0f))
+
+        val breakdownButton = UITextButton().apply {
+            text = "Breakdown"
+            x = actionX
+            y = actionY
+            width = breakdownWidth
+            height = actionHeight
+            padding = Vec4(8f, 6f)
+            onActionUp = actions.onBreakdown
+        }
+        scene.attachChild(breakdownButton)
+
+        var actionRight = actionX + breakdownWidth + 8f
+        actions.onRetrySaving?.let { retry ->
+            val retrySavingButton = UITextButton().apply {
+                text = "Retry saving"
+                x = actionRight
+                y = actionY
+                width = 180f
+                height = actionHeight
+                padding = Vec4(8f, 6f)
+                onActionUp = retry
+            }
+            scene.attachChild(retrySavingButton)
+            actionRight += retrySavingButton.width + 8f
+        }
+
         if (result.storageError != null) {
-            val errorWidth = (Config.getRES_WIDTH() * 0.58f).coerceAtMost(
-                Config.getRES_WIDTH() - Utils.toRes(380f) - 70f
-            ).coerceAtLeast(220f)
+            // Recovery text shares the bottom row with its action, so it can never cover the
+            // verdict or the Breakdown button, and stays below the native numbers.
+            val errorWidth = (statusX - 16f - actionRight).coerceAtLeast(160f)
             scene.attachChild(UIText().apply {
-                x = 30f
-                y = Config.getRES_HEIGHT() - 78f
+                x = actionRight
+                y = actionY
                 width = errorWidth
-                height = 48f
+                height = actionHeight
+                alignment = Anchor.CenterLeft
                 font = resources.getFont("smallFont")
                 text = ellipsize(
                     "Result not saved: ${result.storageError}",
@@ -180,8 +231,8 @@ internal object CourseResultPresenter {
 
         val backButton = textureButton(resources.getTexture("ranking-back")) { actions.onBack() }
         backButton.setPosition(
-            Config.getRES_WIDTH() - backButton.width - 10f,
-            Config.getRES_HEIGHT() - backButton.height - 10f
+            viewportWidth - backButton.width - 10f,
+            viewportHeight - backButton.height - 10f
         )
         scene.attachChild(backButton)
         scene.registerTouchArea(backButton)
@@ -190,43 +241,6 @@ internal object CourseResultPresenter {
         retryButton.setPosition(backButton.x, backButton.y - retryButton.height - 10f)
         scene.attachChild(retryButton)
         scene.registerTouchArea(retryButton)
-
-        var actionY = retryButton.y - 70f
-        fun actionButton(text: String, onAction: () -> Unit): UITextButton {
-            val button = UITextButton().apply {
-                this.text = text
-                x = backButton.x
-                y = actionY
-                width = backButton.width
-                height = 58f
-                onActionUp = onAction
-            }
-            scene.attachChild(button)
-            actionY -= 68f
-            return button
-        }
-
-        val breakdownButton = actionButton("Breakdown") { actions.onBreakdown() }
-        actions.onRetrySaving?.let { retry ->
-            // Keep the title-to-Breakdown gap available for the verdict, including save failures.
-            val retrySavingButton = actionButton("Retry saving") { retry() }
-            val actionWidth = (backButton.width - 8f) / 2f
-            breakdownButton.width = actionWidth
-            retrySavingButton.apply {
-                x = breakdownButton.x + actionWidth + 8f
-                y = breakdownButton.y
-                width = actionWidth
-            }
-        }
-
-        // The aggregate verdict is centered between the ranking title asset and the Breakdown
-        // action, both measured from the actual laid-out components rather than fixed offsets.
-        val statusWidth = Config.getRES_WIDTH() * 0.30f
-        val statusHeight = VERDICT_HEIGHT + VERDICT_SPACING + MAPS_HEIGHT
-        val rankingBottom = rankingTexture.height.toFloat()
-        val statusY = (
-            (rankingBottom + breakdownButton.y - statusHeight) / 2f
-        ).coerceAtLeast(rankingBottom)
 
         fun statusLine(
             lineText: String,
@@ -267,8 +281,17 @@ internal object CourseResultPresenter {
             })
         }
 
+        // Center the 80-unit verdict block in the usable right-side region bounded by the header
+        // and the native Retry button, then clamp it to the viewport. This is independent of any
+        // custom skin asset geometry, so the verdict is always drawn on screen.
+        val viewportLimit = (viewportHeight - statusHeight - 8f).coerceAtLeast(8f)
+        val topLimit = (Utils.toRes(100f) + 8f).coerceAtMost(viewportLimit)
+        val bottomLimit = minOf(retryButton.y - statusHeight - 8f, viewportLimit)
+            .coerceAtLeast(topLimit)
+        val statusY = ((topLimit + bottomLimit) / 2f).coerceIn(topLimit, bottomLimit)
+
         val statusContainer = UIContainer().apply {
-            x = Config.getRES_WIDTH() * 5f / 6f - statusWidth / 2f
+            x = statusX
             y = statusY
             width = statusWidth
             height = statusHeight
@@ -372,4 +395,20 @@ internal object CourseResultPresenter {
 
     private fun countedMaps(result: CourseResult): Int =
         result.order.size.takeIf { it > 0 } ?: result.definition.maps.size
+
+    /**
+     * Bottom of the native combo/accuracy number row in scaled-container coordinates.
+     *
+     * [ScoreNumber] renders the skin's score-digit textures at their raw pixel size, so measuring
+     * the actual digit texture keeps the bottom-left action row below them on every skin instead
+     * of colliding with the native numbers.
+     */
+    private fun nativeStatsBottom(resources: ResourceManager): Float {
+        val digitHeight = arrayOf("0", "x", "comma", "percent")
+            .maxOfOrNull { name ->
+                resources.getTextureWithPrefix(OsuSkin.get().scorePrefix, name)
+                    ?.height?.toFloat() ?: 0f
+            } ?: 0f
+        return Utils.toRes(332f) + 38f + digitHeight.coerceAtLeast(40f)
+    }
 }

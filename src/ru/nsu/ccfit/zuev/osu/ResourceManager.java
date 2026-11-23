@@ -35,6 +35,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Supplier;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -109,6 +110,11 @@ public class ResourceManager {
     private final Map<String, Integer> frameCount = Collections.synchronizedMap(new HashMap<>());
     private final Map<String, TextureRegion> textures = Collections.synchronizedMap(new HashMap<>());
     private final Map<String, BassSoundProvider> sounds = Collections.synchronizedMap(new HashMap<>());
+    private final Object backgroundLock = new Object();
+    private final AtomicLong backgroundRequests = new AtomicLong();
+    private String loadedBackgroundPath;
+    private long loadedBackgroundModified;
+    private long loadedBackgroundLength;
 
     private final Map<String, Integer> customFrameCount = Collections.synchronizedMap(new HashMap<>());
     private final Map<String, TextureRegion> customTextures = Collections.synchronizedMap(new HashMap<>());
@@ -129,6 +135,7 @@ public class ResourceManager {
     }
 
     public void Init(final Engine engine, final Context context) {
+        beginBackgroundRequest();
         this.engine = engine;
         this.context = context;
 
@@ -507,23 +514,71 @@ public class ResourceManager {
     }
 
     public TextureRegion loadBackground(final String file, Engine engine) {
-        if (textures.containsKey("::background")) {
-            engine.getTextureManager().unloadTexture(Objects.requireNonNull(textures.get("::background")).getTexture());
+        return loadBackground(file, engine, beginBackgroundRequest());
+    }
+
+    /** Reserves the shared background for a selection or gameplay loading request. */
+    public long beginBackgroundRequest() {
+        return backgroundRequests.incrementAndGet();
+    }
+
+    public boolean isBackgroundRequestCurrent(long request) {
+        return backgroundRequests.get() == request;
+    }
+
+    /** Canceling an older scene must never cancel its successor's background. */
+    public void cancelBackgroundRequest(long request) {
+        backgroundRequests.compareAndSet(request, request + 1);
+    }
+
+    /**
+     * Serializes texture replacement and rejects stale preview work before it can unload the
+     * background owned by gameplay. A missing image also replaces the shared alias with the menu
+     * fallback; the fallback texture itself is never unloaded here.
+     */
+    public TextureRegion loadBackground(final String file, Engine engine, long request) {
+        synchronized (backgroundLock) {
+            if (!isBackgroundRequestCurrent(request)) return null;
+            File image = file == null ? null : new File(file);
+            long modified = image == null ? 0 : image.lastModified();
+            long length = image == null ? 0 : image.length();
+            TextureRegion current = textures.get("::background");
+            if (current != null && Objects.equals(file, loadedBackgroundPath) &&
+                modified == loadedBackgroundModified && length == loadedBackgroundLength) {
+                return current;
+            }
+            TextureRegion region = textures.get("menu-background");
+            if (file != null) {
+                final QualityFileBitmapSource source = new QualityFileBitmapSource(image);
+                if (source.getWidth() > 0 && source.getHeight() > 0 && source.preload()) {
+                    if (!isBackgroundRequestCurrent(request)) {
+                        source.onLoadBitmap(android.graphics.Bitmap.Config.ARGB_8888).recycle();
+                        return null;
+                    }
+                    final BitmapTextureAtlas texture = new BitmapTextureAtlas(
+                        source.getWidth(), source.getHeight(), TextureOptions.BILINEAR
+                    );
+                    region = TextureRegionFactory.createFromSource(texture, source, 0, 0, false);
+                    engine.getTextureManager().loadTexture(texture);
+                }
+            }
+            if (!isBackgroundRequestCurrent(request)) {
+                if (region != null && region != textures.get("menu-background")) {
+                    engine.getTextureManager().unloadTexture(region.getTexture());
+                }
+                return null;
+            }
+            TextureRegion previous = textures.put("::background", region);
+            loadedBackgroundPath = file;
+            loadedBackgroundModified = modified;
+            loadedBackgroundLength = length;
+            TextureRegion fallback = textures.get("menu-background");
+            if (previous != null && previous != region &&
+                (fallback == null || previous.getTexture() != fallback.getTexture())) {
+                engine.getTextureManager().unloadTexture(previous.getTexture());
+            }
+            return region;
         }
-        if (file == null) {
-            return textures.get("menu-background");
-        }
-        TextureRegion region;
-        final QualityFileBitmapSource source = new QualityFileBitmapSource(new File(file));
-        if (source.getWidth() == 0 || source.getHeight() == 0 || !source.preload()) {
-            textures.put("::background", textures.get("menu-background"));
-            return textures.get("::background");
-        }
-        final BitmapTextureAtlas tex = new BitmapTextureAtlas(source.getWidth(), source.getHeight(), TextureOptions.BILINEAR);
-        region = TextureRegionFactory.createFromSource(tex, source, 0, 0, false);
-        engine.getTextureManager().loadTexture(tex);
-        textures.put("::background", region);
-        return region;
     }
 
     public TextureRegion loadTexture(final String resname, final String file,

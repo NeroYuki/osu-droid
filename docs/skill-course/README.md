@@ -1,6 +1,6 @@
 # Skill Course implementation plans and status
 
-The offline implementation and requested UI/preferences revision are implemented on `skill-course`. See the [acceptance report](C5_ACCEPTANCE_REPORT.md) for passing API 24/API 34 evidence and the limits of that coverage. The user waived further AVD testing for the final visual adjustment. The [continuation checkpoint](RESUME_CHECKPOINT.md) records the completed offline work and the separate C6 gates.
+The offline implementation and requested UI/preferences revision are implemented on `skill-course`. The [post-MVP refinements](POST_MVP_REFINEMENT_PLAN.md) add skin-safe result text, background lifecycle fixes, cached availability, course-card collages and local course score modes. See the [acceptance report](C5_ACCEPTANCE_REPORT.md) for passing API 24/API 34 evidence and the limits of that coverage. The user waived further AVD testing for the visual adjustments. The [continuation checkpoint](RESUME_CHECKPOINT.md) records the completed offline work and the separate C6 gates.
 
 Skill Courses are portable `.odc` JSON playlists that preserve map order and authored mods, run as one attempt, and retain a component score and replay for every played map. The client supplies course management and gameplay; the tournament API stores attempts by course hash and determines official status.
 
@@ -17,6 +17,7 @@ The plan documents are dated 22 November 2026 and remain the design record, incl
 | [Shared course contract](SHARED_CONTRACT.md) | Proposed version 1 JSON format, hashing, mod policy, judgment semantics, result format, and unresolved decisions |
 | [Map availability and recovery plan](MAP_AVAILABILITY_AND_RECOVERY.md) | Post-import detection, missing versus outdated maps, sequential mirror downloads, safe file and database updates, and rescanning |
 | [UI and preferences revision](UI_AND_PREFERENCES_REVISION.md) | Normal result assets, native paged breakdown, numeric rates and persistent per-course/map player choices |
+| [Post-MVP refinements](POST_MVP_REFINEMENT_PLAN.md) | Custom skin compatibility, backgrounds, event-driven availability cache, card collages and offline course score navigation; 199 focused tests |
 
 Read the shared contract before changing either side. Proposed API paths, types, limits, and unconfirmed product choices are identified as proposals; they describe the intended design, not necessarily the implemented behaviour. Where the implementation resolved a proposal differently, the [C5 acceptance report](C5_ACCEPTANCE_REPORT.md) and the source are authoritative.
 
@@ -54,7 +55,7 @@ The latest focused verification is 170 JVM/Robolectric tests with 0 failures, er
 
 As of 23 November 2026:
 
-Client: `D:\dev\osu-droid`, branch `skill-course`, created from `tournament-dev` at the existing HEAD. The C1-C5 changes are included in the requested local Skill Course commit; no push has been made. The refresh-rate experiment remains stashed as `8d592f47a416886bc0177d91d1b7c3d74ecbd5f0`, message `Refresh-rate unlock experiment before Skill Course planning`, and has not been modified. Other pre-existing build, version, attestation and untracked work remains outside that stash and outside the course changes; it is not part of C5 acceptance.
+Client: `D:\dev\osu-droid`, branch `skill-course`, created from `tournament-dev` at the existing HEAD. The C1-C5 changes and follow-up refinements are on this branch, with commit and push authorized by the user. The refresh-rate experiment remains stashed as `8d592f47a416886bc0177d91d1b7c3d74ecbd5f0`, message `Refresh-rate unlock experiment before Skill Course planning`, and has not been modified. Other pre-existing build, version, attestation and untracked work remains outside that stash and outside the course changes; it is not part of C5 acceptance.
 
 Server: `N:\Tournament-Server\osu-droid-tournament-server`, an SMB view of a Linux checkout. It was inspected only; no server source, branch, deployment, or database was changed, and C5 has no course network API to exercise against it. The sibling `multi-server-node` is the multiplayer socket service, not the single-player score API. Implement the server plan in a separate local clone or worktree on a Skill Course branch; do not switch the shared service checkout while it is in use.
 

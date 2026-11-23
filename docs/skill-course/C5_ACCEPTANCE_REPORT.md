@@ -1,8 +1,18 @@
 # Skill Course C5 offline MVP acceptance report
 
-Status on 23 November 2026: the complete offline implementation and requested UI/preferences revision are implemented on `skill-course`. API 24 and API 34 acceptance passed. Further AVD testing was waived by the user for the final visual adjustment; that adjustment is checked by code review, focused tests and debug assembly. C6 server integration and physical-device acceptance remain separate, unimplemented gates. The user authorized a local commit of this implementation; no push or release has been performed.
+Status on 23 November 2026: the complete offline implementation and requested UI/preferences revision are implemented on `skill-course`. API 24 and API 34 acceptance passed. Further AVD testing was waived by the user for the final visual adjustment; that adjustment is checked by code review, focused tests and debug assembly. C6 server integration and physical-device acceptance remain separate, unimplemented gates. The user authorized committing and pushing this branch; no release or deployment was requested.
 
 This report records observed evidence. Read the [client plan](CLIENT_IMPLEMENTATION_PLAN.md), [server plan](SERVER_IMPLEMENTATION_PLAN.md), [testing plan](TESTING_PLAN.md), [shared contract](SHARED_CONTRACT.md), [map recovery plan](MAP_AVAILABILITY_AND_RECOVERY.md), and [UI revision](UI_AND_PREFERENCES_REVISION.md) for the detailed design. The original paused checkpoint is archived; the [current continuation checkpoint](RESUME_CHECKPOINT.md) reflects the completed offline work.
+
+## Post-MVP refinement addendum
+
+Live acquisition check, 23 November 2026: the supplied `Test Jump Course.odc` imported locked with four missing maps on API34 Pixel_8. One sequential recovery batch through the existing Mino/Catboy mirror acquired all four required revisions; manager changed to All maps ready / Play course and preflight enabled Start for four playable maps. Independent reads of the actual `.osu` files and Room rows matched every authored MD5, beatmap ID and object-count tuple. No course was played (zero attempts for this course hash); Wi-Fi was restored to its original off state. Evidence: `.gradle/skill-course-planning/jump-course-acquisition-20261123/VERIFIED_REPORT.md`, `verification.json`, and `verified-final.png`. This supplies the previously missing successful real-mirror acquisition evidence; it does not cover every mirror or real-device acceptance.
+
+The original implementation is committed as `0aecfa764`. The subsequent [refinement changes](POST_MVP_REFINEMENT_PLAN.md) include custom-skin-safe verdict placement, bottom-left Breakdown, larger component grade, correct per-map backgrounds, event-driven cached availability, dimmed card collages, refined manager entry/exit hint, and offline course component/total boards. Ordinary Online PP is explicitly unavailable until server work, as confirmed by the user; course global scores remain C6.
+
+Current focused verification supersedes the earlier 170-test count: **199 tests, zero failures/errors/skips**, plus debug assembly (final build **13s**), **14 Python verifier tests**, and clean `git diff --check`. See `.gradle/skill-course-planning/compact-score-switcher-build.log`. Cache tests establish that repeated reads do not schedule scans and cover import invalidation, coalescing, stale generations, deletion races and recovery from failure. Board tests cover all four online/offline/view combinations, exact identity, sorting, pooled accuracy and signed/published EX. Background ownership has dedicated regression coverage.
+
+No additional AVD or physical-device visual pass was performed for these changes. Earlier screenshots and API24/API34 acceptance runs cover the base MVP, not the new skin/collage/navigation appearance. The final APK remains `build/outputs/apk/debug/osu!droid-2026.1123.0-tournament-debug-2026-11-23.apk`.
 
 ## Implemented scope
 
@@ -89,6 +99,6 @@ python tests/fixtures/skillcourse/verify_avd_results.py `
 ## Limits and remaining gates
 
 - No C6 server code, deployment, official registry, submission/global leaderboard or physical-device test. The detailed server implementation plan is ready for that separate phase.
-- No successful live mirror download was exercised. Typed downloader/import/cancellation tests and local committed imports cover recovery behavior; production mirror revision availability remains an external compatibility check.
+- Live mirror coverage is limited to the successful four-map Mino/Catboy check in the addendum. Typed downloader/import/cancellation tests and local committed imports cover additional recovery behavior; other mirrors and production revision availability remain compatibility checks.
 - Current-API36 compatibility remains unverified after the user waived further AVD runs. API24 and API34 checks supplement, rather than duplicate, the full API34 matrix. No full replay simulation, performance certification, memory-growth study, foldable/small-window matrix or release acceptance is claimed.
 - Preexisting unrelated build/attestation/untracked work is preserved. The refresh-rate stash remains `8d592f47a416886bc0177d91d1b7c3d74ecbd5f0`.

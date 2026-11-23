@@ -1,15 +1,25 @@
 # Skill Course continuation checkpoint
 
-Updated 23 November 2026. The C1-C5 offline MVP and the requested UI/preferences/final-layout revisions are complete on `skill-course`. No implementation worker, build or AVD test remains active. The original paused checkpoint is archived in ignored `.gradle/skill-course-planning/paused-checkpoint-original.md`.
+Updated 23 November 2026. The C1-C5 offline MVP and the requested UI/preferences/final-layout revisions are complete on `skill-course`. No implementation worker or build remains active. The API34 AVD was left in the course manager after the live import/recovery check. The original paused checkpoint is archived in ignored `.gradle/skill-course-planning/paused-checkpoint-original.md`.
+
+## Post-MVP continuation
+
+Commit `0aecfa764` contains the original offline MVP. The subsequent [refinements](POST_MVP_REFINEMENT_PLAN.md) follow it on the same branch. That document supersedes the historical final-visual paragraph below: verdict bounds now ignore Ranking texture height, and Breakdown is bottom left. It records the availability cache, background request ownership, course card collages, course-view hint/button and score mode matrix. The user authorized committing and pushing the branch; preserve unrelated working-tree edits.
+
+Current verification: **199 focused JVM/Robolectric tests, zero failures/errors/skips**, debug assembly, 14 Python verifier tests, clean `git diff --check`. Log: `.gradle/skill-course-planning/compact-score-switcher-build.log`; debug APK path is unchanged. No extra AVD/device pass was run for these refinements. Preserve the previous API24/API34 coverage limits.
+
+Confirmed decisions: course map boards show components from course attempts, while ordinary practice scores remain in the ordinary beatmap board. Course totals use exact frozen definition hashes. Ordinary Online PP has an explicit unavailable state until server work; online course totals are still C6. Do not attempt server PP fetches against the existing score-only response.
+
+OpenCode workers78518 (result UI) and40781 (cache/cards) completed. Worker14435 (navigation/boards) was stopped after its implementation/tests while reviewing; Codex completed integration, async publication/disposal, empty-course totals and the authoritative build/tests. No worker remains running. Preserve unrelated files and refresh-rate stash `8d592f47a416886bc0177d91d1b7c3d74ecbd5f0`; do not commit/push further changes unless requested.
 
 ## Start here
 
 - Read [README](README.md), [acceptance report](C5_ACCEPTANCE_REPORT.md), and [UI revision](UI_AND_PREFERENCES_REVISION.md). Detailed [client](CLIENT_IMPLEMENTATION_PLAN.md), [server](SERVER_IMPLEMENTATION_PLAN.md), [testing](TESTING_PLAN.md), [contract](SHARED_CONTRACT.md), and [map recovery](MAP_AVAILABILITY_AND_RECOVERY.md) plans are retained.
-- Workspace: `D:\dev\osu-droid`, branch `skill-course`. Refresh-rate stash `8d592f47a416886bc0177d91d1b7c3d74ecbd5f0` is intact. Preserve unrelated preexisting modifications and untracked files. A local commit was requested; no push or release was requested.
+- Workspace: `D:\dev\osu-droid`, branch `skill-course`. Refresh-rate stash `8d592f47a416886bc0177d91d1b7c3d74ecbd5f0` is intact. Preserve unrelated preexisting modifications and untracked files. Commit and push were requested; no release or deployment was requested.
 - Final debug APK: `build/outputs/apk/debug/osu!droid-2026.1123.0-tournament-debug-2026-11-23.apk`.
 - Final source verification: `final-layout-build.log`, BUILD SUCCESSFUL in12s, 170 focused JVM/Robolectric tests with zero failures/errors/skips and `assembleDebug`. Python verifier tests14 passing; fixture driver syntax and `git diff --check` pass. The unscoped stock suite has unrelated legacy framework test compilation failures and is not claimed passing.
 - API34 evidence:25 attempts,16 required scenarios, zero errors/warnings (`final-verification.json`). API24 evidence:3 attempts,3 required scenarios, zero errors/warnings (`api24-verification.json`). API24 actual reboot restores3.00x and HD; ordinary selector state restores. The report distinguishes full API34 coverage from compatibility checks.
-- API36 standard/16KB emulator images stalled before app installation with the installed tooling. Stable tools/images were downloaded only under ignored workspace paths. The user then waived further AVD testing, so API36 is not claimed tested and all AVDs are closed.
+- API36 standard/16KB emulator images stalled before app installation with the installed tooling. Stable tools/images were downloaded only under ignored workspace paths. The user then waived further AVD testing, so API36 is not claimed tested. API34 was subsequently reopened for the successful live course import/recovery check.
 
 ## Final visual revision
 
@@ -24,6 +34,6 @@ Completed/Failed and maps played are centered between actual Ranking asset heigh
 
 ## Next phase, when requested
 
-C6 is separate: implement server API/registry/verification, durable submission and course global leaderboard, then pass server/staging and physical-device ADB gates. The SMB server repo `N:\Tournament-Server\osu-droid-tournament-server` was inspected only and remains unchanged. Keep offline behavior intact. Current-API36 compatibility and a successful live mirror download remain explicit validation limits; no physical-device or production acceptance is implied.
+C6 is separate: implement server API/registry/verification, durable submission and course global leaderboard, then pass server/staging and physical-device ADB gates. The SMB server repo `N:\Tournament-Server\osu-droid-tournament-server` was inspected only and remains unchanged. Keep offline behavior intact. Current-API36 compatibility and broader mirror coverage remain validation limits; the successful four-map Mino/Catboy acquisition is recorded in the acceptance report. No physical-device or production acceptance is implied.
 
 Do not restart old workers or repeat the original paused compile fixes. The final layout worker47855 was stopped after its edits when it entered redundant manual compiler setup; parent integration/review and the authoritative Gradle build completed its work. Other prior workers are terminal. All source is reviewable locally; the implementation is included in the requested local commit.

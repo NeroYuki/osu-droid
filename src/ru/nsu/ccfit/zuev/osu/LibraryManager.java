@@ -9,6 +9,7 @@ import com.osudroid.beatmaps.DifficultyCalculationManager;
 import com.osudroid.data.BeatmapSetInfo;
 import com.osudroid.data.DatabaseManager;
 import com.osudroid.beatmaps.parser.BeatmapParser;
+import com.osudroid.skillcourse.recovery.CourseLibraryEvents;
 import kotlin.io.FilesKt;
 import org.jetbrains.annotations.Nullable;
 import ru.nsu.ccfit.zuev.osu.helper.FileUtils;
@@ -26,7 +27,7 @@ import com.osudroid.data.BeatmapInfo;
 public class LibraryManager {
 
 
-    private static List<BeatmapSetInfo> library = new ArrayList<>();
+    private static volatile List<BeatmapSetInfo> library = new ArrayList<>();
 
     private static int currentIndex = 0;
 
@@ -63,8 +64,16 @@ public class LibraryManager {
 
 
     public static void loadLibrary() {
+        loadLibrary(Collections.emptyList());
+    }
 
-        library = new ArrayList<>();
+    /**
+     * Reloads the committed library and publishes one update signal carrying the directories that
+     * were explicitly rescanned.
+     *
+     * Callers must not publish another library event after this method returns.
+     */
+    public static void loadLibrary(@Nullable Collection<String> affectedDirectories) {
 
         if (!FileUtils.canUseSD() || !checkDirectory(Config.getScorePath()) && !checkDirectory(Config.getBeatmapPath())) {
             return;
@@ -74,6 +83,14 @@ public class LibraryManager {
         library = DatabaseManager.getBeatmapInfoTable().getBeatmapSetList();
 
         DifficultyCalculationManager.calculateDifficulties();
+
+        // The in-memory library and its Room rows are now a coherent committed snapshot. Publish
+        // the single library-update signal here so deletes, clear-database and ordinary imports all
+        // invalidate cached course availability.
+        CourseLibraryEvents.importCompleted(
+                affectedDirectories == null
+                        ? Collections.<String>emptyList()
+                        : affectedDirectories);
     }
 
     /**

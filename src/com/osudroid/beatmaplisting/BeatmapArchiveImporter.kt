@@ -10,7 +10,6 @@ import com.osudroid.data.IBeatmapInfoDAO
 import com.osudroid.skillcourse.CourseMap
 import com.osudroid.skillcourse.CourseLibraryGuard
 import com.osudroid.skillcourse.recovery.BeatmapFileIdentity
-import com.osudroid.skillcourse.recovery.CourseLibraryEvents
 import com.osudroid.skillcourse.recovery.readBeatmapFileIdentity
 import java.io.File
 import java.io.FileOutputStream
@@ -1651,10 +1650,7 @@ internal object BeatmapArchiveImporterHooks {
 
     var daoProvider: () -> IBeatmapInfoDAO = { DatabaseManager.beatmapInfoTable }
 
-    var libraryReload: (Collection<String>) -> Unit = { directories ->
-        LibraryManager.loadLibrary()
-        CourseLibraryEvents.importCompleted(directories)
-    }
+    var libraryReload: (Collection<String>) -> Unit = { directories -> LibraryManager.loadLibrary(directories) }
 
     var cacheInvalidator: (String) -> Unit = { md5 -> BeatmapCache.invalidate(md5) }
 
@@ -1668,10 +1664,7 @@ internal object BeatmapArchiveImporterHooks {
 
     fun resetForTesting() {
         daoProvider = { DatabaseManager.beatmapInfoTable }
-        libraryReload = { directories ->
-            LibraryManager.loadLibrary()
-            CourseLibraryEvents.importCompleted(directories)
-        }
+        libraryReload = { directories -> LibraryManager.loadLibrary(directories) }
         cacheInvalidator = { md5 -> BeatmapCache.invalidate(md5) }
         installedIdentityReader = ::readBeatmapFileIdentity
         fault = {}

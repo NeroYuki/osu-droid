@@ -24,6 +24,11 @@ import com.osudroid.data.DatabaseManager;
 import com.reco1l.andengine.sprite.UIAnimatedSprite;
 import com.reco1l.andengine.sprite.UISprite;
 import com.osudroid.multiplayer.Multiplayer;
+import com.osudroid.skillcourse.runtime.BoardMode;
+import com.osudroid.skillcourse.runtime.BoardModePolicy;
+import com.osudroid.skillcourse.runtime.BoardModeSession;
+import com.osudroid.skillcourse.ui.CourseNavigation;
+import com.osudroid.skillcourse.ui.CourseLeaderboardSwitcher;
 
 import com.osudroid.ui.v2.modmenu.ModMenu;
 import com.osudroid.GameMode;
@@ -53,6 +58,7 @@ import org.anddev.andengine.opengl.texture.region.TextureRegion;
 import org.anddev.andengine.util.Debug;
 import org.anddev.andengine.util.HorizontalAlign;
 import org.anddev.andengine.util.MathUtils;
+import com.reco1l.andengine.ui.UITextButton;
 
 import java.io.File;
 import java.io.IOException;
@@ -93,7 +99,8 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
     private boolean courseSavedFavorites;
     private List<String> courseSavedLimit;
     private String courseSavedSelection;
-    private Rectangle courseManagerButton;
+    private UITextButton courseManagerButton;
+    private Entity courseViewHint;
     public UIScene scene;
     public UIContainer frontLayer = new UIContainer();
     SortOrder sortOrder = SortOrder.Title;
@@ -109,6 +116,7 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
     private BeatmapInfo selectedBeatmap;
     private Sprite bg = null;
     private String backgroundPath = "";
+    private long backgroundRequestId;
     private ScoreBoard board;
     private Float touchY = null;
     private String filterText = "";
@@ -136,6 +144,10 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
 
     private Scene.ITouchArea currentPressedButton;
     private UISprite scoringSwitcher = null;
+    private boolean scoringSwitcherRegistered = false;
+    private final BoardModeSession boardSession = new BoardModeSession(BoardMode.LOCAL_MAP);
+    private boolean lastBoardOnlineState;
+    private boolean lastBoardCourseState;
     private SearchBarFragment searchBar = null;
     private GroupType groupType = GroupType.MapSet;
 
@@ -144,6 +156,7 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
     private boolean previousSelectionPerformed;
     private final LinkedList<BeatmapSetItem> previousSelectedItems = new LinkedList<>();
     private final LRUCache<String, RankedStatus> mapStatuses = new LRUCache<>(50);
+    private volatile long mapStatusGeneration;
 
     public SongMenu() {
     }
@@ -198,6 +211,27 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
     }
 
     public synchronized void load() {
+        if (board != null) board.dispose();
+        cancelBackgroundLoading();
+        backgroundPath = "";
+        bg = null;
+
+        // The scene is rebuilt on every reload. Drop the old overlay/touch bindings so a course
+        // reload can never keep a stale manager button or invisible touch area alive.
+        if (courseManagerButton != null) {
+            if (scene != null) {
+                scene.unregisterTouchArea(courseManagerButton);
+            }
+            courseManagerButton.detachSelf();
+            courseManagerButton = null;
+        }
+        if (courseViewHint != null) {
+            courseViewHint.detachSelf();
+            courseViewHint = null;
+        }
+        scoringSwitcher = null;
+        scoringSwitcherRegistered = false;
+
         scene = new UIScene();
         // This is needed for UIScene to behave on par with regular Scene, otherwise we would have weird scenarios such
         // as entities in the back layer having touch priority despite being rendered behind the front layer.
@@ -227,6 +261,7 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
         backLayer.attachChild(bgDimRect);
 
         board = new ScoreBoard(scene, backLayer, this);
+        board.setBoardMode(boardSession.getMode());
 
 //        float oy = 10;
         for (final BeatmapSetInfo i : com.osudroid.skillcourse.runtime.CourseView.filterSets(LibraryManager.getLibrary())) {
@@ -238,24 +273,6 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
         sortOrder = SortOrder.Title;
         sort();
 
-        if (courseManagerButton != null) {
-            courseManagerButton.detachSelf();
-        }
-        courseManagerButton = new Rectangle(Config.getRES_WIDTH() - 190, 10, 180, 48) {
-            @Override
-            public boolean onAreaTouched(TouchEvent event, float x, float y) {
-                if (event.isActionUp()) {
-                    Execution.mainThread(() -> com.osudroid.skillcourse.ui.CourseUi.showManager());
-                }
-                return true;
-            }
-        };
-        courseManagerButton.setColor(0.12f, 0.16f, 0.25f, 0.95f);
-        Text courseLabel = new Text(16, 8, ResourceManager.getInstance().getFont("smallFont"), "Skill Courses");
-        courseManagerButton.attachChild(courseLabel);
-        frontLayer.attachChild(courseManagerButton);
-        scene.registerTouchArea(courseManagerButton);
-
         if (items.size() == 0) {
             final Text text = new Text(0, 0, ResourceManager.getInstance()
                     .getFont("CaptionFont"), "There are no songs in library, try using the beatmap downloader.",
@@ -265,6 +282,10 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
             text.setScale(1.5f);
             text.setColor(0, 0, 0);
             scene.attachChild(text);
+            if (!Multiplayer.isMultiplayer) createScoringSwitcher();
+            attachCourseViewHint(Config.getRES_HEIGHT() - 210f);
+            attachCourseManagerButton();
+            refreshBoardNavigationUi(false);
             return;
         }
 
@@ -705,29 +726,80 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
         frontLayer.attachChild(randomMap);
         scene.registerTouchArea(randomMap);
 
-        if (OnlineScoring.getInstance().createSecondPanel() != null) {
-            OnlinePanel panel = OnlineScoring.getInstance().getSecondPanel();
+        // A course view is fully local: do not create/refresh the ordinary online profile panel.
+        final OnlinePanel panel = isCourseBoardActive()
+                ? null
+                : OnlineScoring.getInstance().createSecondPanel();
+
+        if (panel != null) {
             panel.detachSelf();
             panel.setPosition(randomMap.getX() + randomMap.getWidthScaled() + 20, Config.getRES_HEIGHT() - 110 - paddingBottom);
             OnlineScoring.getInstance().loadProfileAssets(false);
             frontLayer.attachChild(panel);
-
-            scoringSwitcher = new UISprite() {
-                @Override
-                public boolean onAreaTouched(TouchEvent pSceneTouchEvent, float pTouchAreaLocalX, float pTouchAreaLocalY) {
-                    if (!pSceneTouchEvent.isActionDown()) return false;
-                    toggleScoringSwitcher();
-                    return true;
-                }
-            };
-            scoringSwitcher.setTextureRegion(ResourceManager.getInstance().getTextureIfLoaded("ranking_disabled"));
-            scoringSwitcher.setPosition(10, 10);
             if (!Multiplayer.isMultiplayer) {
                 scene.registerTouchArea(panel.rect);
             }
-            scene.registerTouchArea(scoringSwitcher);
-            frontLayer.attachChild(scoringSwitcher);
         }
+
+        if (!Multiplayer.isMultiplayer) {
+            createScoringSwitcher();
+            attachCourseViewHint(randomMap.getY() - 44f);
+        } else if (panel != null) {
+            // Preserve the legacy multiplayer switcher lifetime.
+            createScoringSwitcher();
+        }
+
+        refreshBoardNavigationUi(false);
+        attachCourseManagerButton();
+    }
+
+    private void createScoringSwitcher() {
+        scoringSwitcher = CourseLeaderboardSwitcher.create(this::toggleScoringSwitcher);
+        scoringSwitcher.setPosition(10, 10);
+        scene.registerTouchArea(scoringSwitcher);
+        scoringSwitcherRegistered = true;
+        frontLayer.attachChild(scoringSwitcher);
+    }
+
+    /** Attaches the themed native course manager button above the beatmap/header layers. */
+    private void attachCourseManagerButton() {
+        if (courseManagerButton != null) {
+            courseManagerButton.detachSelf();
+            courseManagerButton = null;
+        }
+
+        courseManagerButton = CourseNavigation.createManagerButton(
+                () -> Execution.mainThread(() -> com.osudroid.skillcourse.ui.CourseUi.showManager())
+        );
+        courseManagerButton.setPosition(Config.getRES_WIDTH() - 234, 12);
+        frontLayer.attachChild(courseManagerButton);
+        scene.registerTouchArea(courseManagerButton);
+    }
+
+    /** Dark, readable exit hint above the Mods/Options/Random controls. */
+    private void attachCourseViewHint(float y) {
+        if (courseViewHint != null) {
+            courseViewHint.detachSelf();
+            courseViewHint = null;
+        }
+        if (Multiplayer.isMultiplayer || !com.osudroid.skillcourse.runtime.CourseView.isActive()) {
+            return;
+        }
+
+        var hintText = new Text(0, 0,
+                ResourceManager.getInstance().getFont("smallFont"),
+                CourseNavigation.exitCourseViewHint());
+        var background = new Rectangle(0, 0, hintText.getWidth() + 20, hintText.getHeight() + 10);
+        background.setColor(0, 0, 0, 0.75f);
+
+        var hint = new Entity();
+        hint.attachChild(background);
+        hintText.setPosition(10, 5);
+        hintText.setColor(0.95f, 0.95f, 1f);
+        hint.attachChild(hintText);
+        hint.setPosition(12, y);
+        frontLayer.attachChild(hint);
+        courseViewHint = hint;
     }
 
     public void loadFilterFragment() {
@@ -736,15 +808,30 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
     }
 
     public void toggleScoringSwitcher() {
-        if (board.isShowOnlineScores()) {
-            board.setShowOnlineScores(false);
-            board.init(selectedBeatmap);
-        } else if (OnlineManager.getInstance().isStayOnline()) {
-            board.setShowOnlineScores(true);
-            board.init(selectedBeatmap);
+        if (board == null) {
+            return;
         }
 
-        updateScoringSwitcherStatus(true);
+        if (Multiplayer.isMultiplayer) {
+            // Legacy multiplayer behavior is intentionally left alone.
+            if (board.isShowOnlineScores()) {
+                board.setShowOnlineScores(false);
+                board.init(selectedBeatmap);
+            } else if (OnlineManager.getInstance().isStayOnline()) {
+                board.setShowOnlineScores(true);
+                board.init(selectedBeatmap);
+            }
+            updateScoringSwitcherStatus(true, board.getBoardMode());
+            return;
+        }
+
+        boolean online = isBoardOnlineEnabled();
+        boolean courseActive = isCourseBoardActive();
+        BoardMode next = boardSession.toggle(online, courseActive);
+        if (!BoardModePolicy.isCycleVisible(next, online, courseActive)) {
+            return;
+        }
+        applyBoardModeForSelection();
     }
 
     public UIScene getScene() {
@@ -754,6 +841,7 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
 
     public void show() {
         engine.setScene(scene);
+        applyBoardModeForSelection();
     }
 
     public void setFilter(final String filter, final SortOrder order,
@@ -839,6 +927,7 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
     public void onUpdate(final float pSecondsElapsed) {
         secPassed += pSecondsElapsed;
         increaseBackgroundLuminance(pSecondsElapsed);
+        syncBoardModeIfEnvironmentChanged();
 
         if (Config.isPlayMusicPreview()) {
             var songService = GlobalManager.getInstance().getSongService();
@@ -1106,7 +1195,7 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
             playMusic(beatmapInfo.getAudioPath(), beatmapInfo.getPreviewTime());
         }
 
-        if (selectedBeatmap != null && selectedBeatmap.getFilename().equals(beatmapInfo.getFilename())) {
+        if (selectedBeatmap != null && selectedBeatmap.getMD5().equals(beatmapInfo.getMD5())) {
             // Do not initiate gameplay if the player is still holding one of the menu buttons.
             if (currentPressedButton != null) {
                 return;
@@ -1139,60 +1228,51 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
         cancelCalculationJobs();
         cancelMapStatusLoadingJob();
         updateInfo(beatmapInfo);
-        updateScoringSwitcherStatus(false);
-        board.init(beatmapInfo);
+        applyBoardModeForSelection();
 
-        if (!reloadBG && (beatmapInfo.getBackgroundFilename() == null || backgroundPath.equals(beatmapInfo.getBackgroundPath()))) {
-            return;
-        }
-        backgroundPath = beatmapInfo.getBackgroundPath();
-        bg = null;
-        scene.setBackground(new ColorBackground(0, 0, 0));
+        loadSelectionBackground(beatmapInfo, reloadBG);
+    }
 
+    private void cancelBackgroundLoading() {
+        ResourceManager.getInstance().cancelBackgroundRequest(backgroundRequestId);
         if (backgroundLoadingJob != null) {
             backgroundLoadingJob.cancel(new CancellationException("Background loading has been cancelled."));
+            backgroundLoadingJob = null;
         }
+    }
 
+    /** Refreshes selection artwork without treating a repeated selection as a gameplay start. */
+    public void refreshBackground() {
+        if (selectedBeatmap != null) loadSelectionBackground(selectedBeatmap, true);
+    }
+
+    private void loadSelectionBackground(final BeatmapInfo beatmapInfo, boolean force) {
+        final ResourceManager resources = ResourceManager.getInstance();
+        final String path = Config.isSafeBeatmapBg() || beatmapInfo.getBackgroundFilename() == null ||
+            beatmapInfo.getBackgroundFilename().isEmpty() ? null : beatmapInfo.getBackgroundPath();
+        if (!force && bg != null && Objects.equals(backgroundPath, path) &&
+            resources.isBackgroundRequestCurrent(backgroundRequestId)) return;
+
+        cancelBackgroundLoading();
+        final long request = resources.beginBackgroundRequest();
+        backgroundRequestId = request;
+        backgroundPath = path;
+        bg = null;
+        scene.setBackground(new ColorBackground(0, 0, 0));
         backgroundLoadingJob = Execution.async(scope -> {
             JobKt.ensureActive(scope.getCoroutineContext());
-
-            TextureRegion tex = Config.isSafeBeatmapBg() || beatmapInfo.getBackgroundFilename() == null?
-                    ResourceManager.getInstance().getTexture("menu-background") :
-                    ResourceManager.getInstance().loadBackground(backgroundPath);
-
-            if (tex != null) {
-                float height = tex.getHeight();
-                height *= Config.getRES_WIDTH()
-                        / (float) tex.getWidth();
-                bg = new Sprite(0,
-                        (Config.getRES_HEIGHT() - height) / 2, Config
-                        .getRES_WIDTH(), height, tex);
-                bg.setColor(0, 0, 0);
-            }
-
+            TextureRegion texture = resources.loadBackground(path, engine, request);
             JobKt.ensureActive(scope.getCoroutineContext());
-
-            if (bg == null) {
-                final TextureRegion tex1 = ResourceManager
-                        .getInstance().getTexture("menu-background");
-                float height = tex1.getHeight();
-                height *= Config.getRES_WIDTH()
-                        / (float) tex1.getWidth();
-                bg = new Sprite(
-                        0,
-                        (Config.getRES_HEIGHT() - height) / 2,
-                        Config.getRES_WIDTH(), height, tex1);
-                backgroundPath = "";
-            }
-
-            JobKt.ensureActive(scope.getCoroutineContext());
-
+            if (texture == null || !resources.isBackgroundRequestCurrent(request)) return;
+            float height = texture.getHeight() * Config.getRES_WIDTH() / (float) texture.getWidth();
+            final Sprite loaded = new Sprite(0, (Config.getRES_HEIGHT() - height) / 2,
+                Config.getRES_WIDTH(), height, texture);
+            loaded.setColor(0, 0, 0);
             Execution.updateThread(() -> {
-                if (selectedBeatmap != null && !selectedBeatmap.getFilename().equals(beatmapInfo.getFilename())) {
-                    return;
-                }
-
-                scene.setBackground(new SpriteBackground(bg));
+                if (!resources.isBackgroundRequestCurrent(request) || selectedBeatmap == null ||
+                    !selectedBeatmap.getMD5().equals(beatmapInfo.getMD5())) return;
+                bg = loaded;
+                scene.setBackground(new SpriteBackground(loaded));
             });
         });
     }
@@ -1204,7 +1284,7 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
     }
 
     public void updateScore() {
-        board.init(selectedBeatmap);
+        applyBoardModeForSelection();
         if (selectedItem != null) {
             selectedItem.updateMarks();
         }
@@ -1389,7 +1469,7 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
             return;
         }
 
-        board.init(selectedBeatmap);
+        applyBoardModeForSelection();
     }
 
     public void setY(final float y) {
@@ -1638,6 +1718,7 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
             courseSavedLimit = limitC == null ? null : new ArrayList<>(limitC);
             courseSavedSelection = selectedBeatmap == null ? null : selectedBeatmap.getMD5();
         }
+        boardSession.enterCourse(isBoardOnlineEnabled());
         reload();
         setFilter("", SortOrder.Title, false, null);
         show();
@@ -1649,6 +1730,7 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
         }
         SortOrder order = courseSavedOrder;
         courseSavedOrder = null;
+        boardSession.exitCourse(isBoardOnlineEnabled());
         reload();
         setFilter(courseSavedFilter, order, courseSavedFavorites, courseSavedLimit);
         BeatmapInfo previous = courseSavedSelection == null ? null : LibraryManager.findBeatmapByMD5(courseSavedSelection);
@@ -1695,18 +1777,90 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
     }
 
     private void cancelMapStatusLoadingJob() {
+        mapStatusGeneration++;
         if (mapStatusJob != null) {
             mapStatusJob.cancel(new CancellationException("Beatmap status check has been cancelled."));
         }
     }
 
-    private void updateScoringSwitcherStatus(boolean forceUpdate) {
+    private boolean isBoardOnlineEnabled() {
+        return !Multiplayer.isMultiplayer && OnlineManager.getInstance().isStayOnline();
+    }
+
+    private boolean isCourseBoardActive() {
+        return !Multiplayer.isMultiplayer && com.osudroid.skillcourse.runtime.CourseView.isActive();
+    }
+
+    /** Login/logout or a late course enter/exit must normalize the board without user input. */
+    private void syncBoardModeIfEnvironmentChanged() {
+        if (board == null || Multiplayer.isMultiplayer) {
+            return;
+        }
+
+        boolean online = isBoardOnlineEnabled();
+        boolean courseActive = isCourseBoardActive();
+        BoardMode normalized = BoardModePolicy.normalize(boardSession.getMode(), online, courseActive);
+
+        if (online != lastBoardOnlineState || courseActive != lastBoardCourseState ||
+                normalized != boardSession.getMode()) {
+            applyBoardModeForSelection();
+        }
+    }
+
+    /** Re-normalizes the mode, refreshes its icon and reloads the selected board. */
+    private void applyBoardModeForSelection() {
+        refreshBoardNavigationUi(false);
+        if (board != null) {
+            board.init(selectedBeatmap);
+        }
+    }
+
+    /**
+     * Updates the compact switcher and board mode. Async online status lookups
+     * are only allowed for the ordinary online-score mode; course and PP modes never call online.
+     */
+    private void refreshBoardNavigationUi(boolean forceStatus) {
+        if (board == null) {
+            return;
+        }
+
+        if (Multiplayer.isMultiplayer) {
+            updateScoringSwitcherStatus(forceStatus, board.getBoardMode());
+            return;
+        }
+
+        boolean online = isBoardOnlineEnabled();
+        boolean courseActive = isCourseBoardActive();
+        BoardMode mode = boardSession.normalize(online, courseActive);
+        board.setBoardMode(mode);
+
+        if (scoringSwitcher != null) {
+            boolean visible = BoardModePolicy.isCycleVisible(mode, online, courseActive);
+            scoringSwitcher.setVisible(visible);
+            if (visible && !scoringSwitcherRegistered) {
+                scene.registerTouchArea(scoringSwitcher);
+                scoringSwitcherRegistered = true;
+            } else if (!visible && scoringSwitcherRegistered) {
+                scene.unregisterTouchArea(scoringSwitcher);
+                scoringSwitcherRegistered = false;
+            }
+        }
+
+        lastBoardOnlineState = online;
+        lastBoardCourseState = courseActive;
+        updateScoringSwitcherStatus(forceStatus, mode);
+    }
+
+    private void updateScoringSwitcherStatus(boolean forceUpdate, BoardMode mode) {
         if (scoringSwitcher == null) {
             return;
         }
 
-        if (selectedBeatmap == null || !board.isShowOnlineScores()) {
-            scoringSwitcher.setTextureRegion(ResourceManager.getInstance().getTextureIfLoaded("ranking_disabled"));
+        if (mode != BoardMode.ONLINE_SCORE || selectedBeatmap == null || isCourseBoardActive() ||
+                !OnlineManager.getInstance().isStayOnline()) {
+            cancelMapStatusLoadingJob();
+            scoringSwitcher.setTextureRegion(ResourceManager.getInstance().getTexture(
+                    CourseLeaderboardSwitcher.textureName(mode)));
             return;
         }
 
@@ -1724,40 +1878,51 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
             return;
         }
 
-        scoringSwitcher.setTextureRegion(ResourceManager.getInstance().getTexture("ranking_enabled"));
+        scoringSwitcher.setTextureRegion(ResourceManager.getInstance().getTexture("ranking_enabled_score"));
 
         cancelMapStatusLoadingJob();
 
+        final long request = mapStatusGeneration;
+        final ScoreBoard requestedBoard = board;
+        final UISprite requestedSwitcher = scoringSwitcher;
         mapStatusJob = Execution.async(scope -> {
             try {
                 JobKt.ensureActive(scope.getCoroutineContext());
 
                 var status = OnlineManager.getInstance().getBeatmapStatus(md5);
 
-                if (!board.isShowOnlineScores() || status == null || scoringSwitcher == null || selectedBeatmap == null || !selectedBeatmap.getMD5().equals(md5)) {
-                    return;
-                }
-
-                mapStatuses.put(md5, status);
-
+                if (status == null) return;
                 JobKt.ensureActive(scope.getCoroutineContext());
 
-                scoringSwitcher.setTextureRegion(ResourceManager.getInstance().getTextureIfLoaded(
-                    "selection-" + switch (status) {
-                        case ranked, approved, loved -> status.name().toLowerCase();
-                        default -> "question";
-                    }
-                ));
+                Execution.updateThread(() -> {
+                    if (!isMapStatusRequestCurrent(request, requestedBoard, requestedSwitcher, md5)) return;
+                    mapStatuses.put(md5, status);
+                    requestedSwitcher.setTextureRegion(ResourceManager.getInstance().getTextureIfLoaded(
+                        "selection-" + switch (status) {
+                            case ranked, approved, loved -> status.name().toLowerCase();
+                            case qualified -> "approved";
+                            default -> "question";
+                        }
+                    ));
+                });
             } catch (OnlineManagerException e) {
                 Debug.e("Cannot get beatmap status: " + e.getMessage(), e);
 
                 JobKt.ensureActive(scope.getCoroutineContext());
 
-                if (scoringSwitcher != null) {
-                    scoringSwitcher.setTextureRegion(ResourceManager.getInstance().getTexture("ranking_enabled"));
-                }
+                Execution.updateThread(() -> {
+                    if (isMapStatusRequestCurrent(request, requestedBoard, requestedSwitcher, md5)) {
+                        requestedSwitcher.setTextureRegion(ResourceManager.getInstance().getTexture("ranking_enabled_score"));
+                    }
+                });
             }
         });
+    }
+
+    private boolean isMapStatusRequestCurrent(long request, ScoreBoard requestedBoard, UISprite requestedSwitcher, String md5) {
+        return request == mapStatusGeneration && board == requestedBoard && scoringSwitcher == requestedSwitcher &&
+                requestedBoard.getBoardMode() == BoardMode.ONLINE_SCORE && !isCourseBoardActive() &&
+                OnlineManager.getInstance().isStayOnline() && selectedBeatmap != null && selectedBeatmap.getMD5().equals(md5);
     }
 
     /**

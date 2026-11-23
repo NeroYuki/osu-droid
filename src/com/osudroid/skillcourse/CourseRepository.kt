@@ -4,6 +4,7 @@ import com.osudroid.data.DatabaseManager
 import com.osudroid.data.ICourseDAO
 import com.osudroid.data.SkillCourseAttemptEntity
 import com.osudroid.data.SkillCourseEntity
+import com.osudroid.skillcourse.recovery.CourseAvailabilityCache
 import java.util.UUID
 
 /**
@@ -257,27 +258,50 @@ object CourseRepository {
 
     @JvmStatic
     @JvmOverloads
-    fun create(definition: CourseDefinition, locked: Boolean = false): SkillCourseEntity =
-        DatabaseManager.runInTransaction { core().create(definition, locked) }
+    fun create(definition: CourseDefinition, locked: Boolean = false): SkillCourseEntity {
+        val entity = DatabaseManager.runInTransaction { core().create(definition, locked) }
+        CourseAvailabilityCache.onCourseChanged(null, entity.courseHash)
+        return entity
+    }
 
     @JvmStatic
-    fun importCourse(text: String): SkillCourseEntity =
-        DatabaseManager.runInTransaction { core().importCourse(text) }
+    fun importCourse(text: String): SkillCourseEntity {
+        val entity = DatabaseManager.runInTransaction { core().importCourse(text) }
+        CourseAvailabilityCache.onCourseChanged(null, entity.courseHash)
+        return entity
+    }
 
     @JvmStatic
-    fun save(id: String, definition: CourseDefinition): SkillCourseEntity =
-        DatabaseManager.runInTransaction { core().save(id, definition) }
+    fun save(id: String, definition: CourseDefinition): SkillCourseEntity {
+        val previousHash = core().getEntity(id)?.courseHash
+        val entity = DatabaseManager.runInTransaction { core().save(id, definition) }
+        CourseAvailabilityCache.onCourseChanged(previousHash, entity.courseHash)
+        return entity
+    }
 
     @JvmStatic
-    fun setLocked(id: String, locked: Boolean): SkillCourseEntity =
-        DatabaseManager.runInTransaction { core().setLocked(id, locked) }
+    fun setLocked(id: String, locked: Boolean): SkillCourseEntity {
+        // Lock state does not change availability. Do not invalidate or rescan the cache here.
+        return DatabaseManager.runInTransaction { core().setLocked(id, locked) }
+    }
 
     @JvmStatic
-    fun delete(id: String): Boolean = DatabaseManager.runInTransaction { core().delete(id) }
+    fun delete(id: String): Boolean {
+        val courseHash = core().getEntity(id)?.courseHash
+        val deleted = DatabaseManager.runInTransaction { core().delete(id) }
+        if (deleted && courseHash != null) {
+            CourseAvailabilityCache.evictCourse(courseHash)
+        }
+        return deleted
+    }
 
     @JvmStatic
-    fun toggleMap(id: String, map: CourseMap): SkillCourseEntity =
-        DatabaseManager.runInTransaction { core().toggleMap(id, map) }
+    fun toggleMap(id: String, map: CourseMap): SkillCourseEntity {
+        val previousHash = core().getEntity(id)?.courseHash
+        val entity = DatabaseManager.runInTransaction { core().toggleMap(id, map) }
+        CourseAvailabilityCache.onCourseChanged(previousHash, entity.courseHash)
+        return entity
+    }
 
     @JvmStatic
     @JvmOverloads

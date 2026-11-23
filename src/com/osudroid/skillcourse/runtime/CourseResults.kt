@@ -54,6 +54,7 @@ object CourseResults {
     @JvmStatic fun back() {
         val global = GlobalManager.getInstance()
         global.engine.scene = global.songMenu.scene
+        global.songMenu.refreshBackground()
         global.songMenu.updateScore()
         CourseView.refreshCourseViewIfVisible()
         val selected = global.songMenu.selectedBeatmap

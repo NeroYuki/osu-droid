@@ -8,6 +8,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -22,16 +23,15 @@ import com.osudroid.skillcourse.CourseCodec
 import com.osudroid.skillcourse.CourseDefinition
 import com.osudroid.skillcourse.CourseMap
 import com.osudroid.skillcourse.CourseRepository
+import com.osudroid.skillcourse.recovery.CourseAvailabilityCache
 import com.osudroid.skillcourse.recovery.CourseAvailabilityIssue
-import com.osudroid.skillcourse.recovery.CourseAvailabilityScanner
+import com.osudroid.skillcourse.recovery.CourseAvailabilityListener
 import com.osudroid.skillcourse.recovery.CourseAvailabilitySnapshot
-import com.osudroid.skillcourse.recovery.CourseLibraryEvents
-import com.osudroid.skillcourse.recovery.CourseLibraryListener
+import com.osudroid.skillcourse.recovery.CourseAvailabilityState
 import com.osudroid.skillcourse.recovery.CourseMapStatus
 import com.osudroid.skillcourse.recovery.CourseRecoveryResult
 import com.osudroid.skillcourse.recovery.CourseMapRecovery
 import com.osudroid.utils.ModHashMap
-import com.osudroid.utils.async
 import com.osudroid.utils.mainThread
 import com.reco1l.osu.ui.MessageDialog
 import com.reco1l.osu.ui.Option
@@ -41,16 +41,16 @@ import ru.nsu.ccfit.zuev.osuplus.R
 /**
  * The native course manager.
  *
- * Availability is derived state and is always scanned off the UI thread. A generation counter and
- * the library revision prevent a slow scan from overwriting a newer library snapshot.
+ * Availability is derived state owned by [CourseAvailabilityCache]. Opening the manager only reads
+ * cached snapshots (or their checking/failure placeholders); it never scans the library itself.
+ * Cache completion and invalidation events update the affected rows on the main thread.
  */
 class CourseManagerFragment : BaseFragment() {
 
     private data class CourseRow(
         val entity: SkillCourseEntity,
         val definition: CourseDefinition?,
-        val snapshot: CourseAvailabilitySnapshot? = null,
-        val scanComplete: Boolean = false
+        val availability: CourseAvailabilityState? = null
     )
 
     private var selectedBeatmap: BeatmapInfo? = null
@@ -58,14 +58,13 @@ class CourseManagerFragment : BaseFragment() {
 
     private var rows = mutableListOf<CourseRow>()
     private var adapter: CourseAdapter? = null
-    private var scanGeneration = 0
     private var cleanedUp = false
     private var recoveryDialog: CourseRecoveryFragment? = null
 
-    private val libraryListener = CourseLibraryListener {
+    private val availabilityListener = CourseAvailabilityListener { courseHash ->
         mainThread {
             if (isAdded && !cleanedUp) {
-                refreshCourses()
+                updateAvailability(courseHash)
             }
         }
     }
@@ -93,7 +92,7 @@ class CourseManagerFragment : BaseFragment() {
     override fun onLoadView() {
         CourseUi.attachManager(this)
         CourseUi.addRefreshListener(refreshListener)
-        CourseLibraryEvents.addListener(libraryListener)
+        CourseAvailabilityCache.addListener(availabilityListener)
 
         val body = findViewById<View>(R.id.frg_body)
         body?.layoutParams = body?.layoutParams?.also {
@@ -122,7 +121,6 @@ class CourseManagerFragment : BaseFragment() {
             return
         }
 
-        val generation = ++scanGeneration
         val entities = try {
             CourseRepository.listCourses()
         } catch (e: Exception) {
@@ -133,74 +131,57 @@ class CourseManagerFragment : BaseFragment() {
             return
         }
 
-        val loaded = entities.map { entity ->
+        rows = entities.map { entity ->
             val definition = try {
                 CourseCodec.decode(entity.definitionJson, allowDraft = true)
             } catch (_: Exception) {
                 null
             }
-            CourseRow(entity, definition)
-        }
+            CourseRow(
+                entity = entity,
+                definition = definition,
+                availability = definition?.let { CourseAvailabilityCache.get(entity.courseHash) }
+            )
+        }.toMutableList()
 
-        rows = loaded.toMutableList()
         adapter?.notifyDataSetChanged()
         updateEmptyState()
-
-        if (loaded.isEmpty()) {
-            showStatus(null)
-            return
-        }
-
-        showStatus(getString(R.string.skill_course_checking))
-
-        for (row in loaded) {
-            val definition = row.definition
-            if (definition == null) {
-                continue
-            }
-
-            async {
-                val snapshot = try {
-                    CourseAvailabilityScanner.scan(definition)
-                } catch (_: Exception) {
-                    null
-                }
-
-                mainThread {
-                    if (cleanedUp || generation != scanGeneration || !isAdded) {
-                        return@mainThread
-                    }
-
-                    if (snapshot != null && snapshot.libraryRevision < CourseLibraryEvents.revision) {
-                        // A library commit happened while this scan was running. Rescan instead of
-                        // publishing a stale result.
-                        refreshCourses()
-                        return@mainThread
-                    }
-
-                    val index = rows.indexOfFirst { it.entity.id == row.entity.id }
-                    if (index >= 0) {
-                        rows[index] = rows[index].copy(snapshot = snapshot, scanComplete = true)
-                        adapter?.notifyItemChanged(index)
-                    }
-                    updateScanStatus(generation)
-                }
-            }
-        }
-
-        // A row without a decodable definition never produces a scan completion.
-        updateScanStatus(generation)
+        updateAvailabilityStatus()
     }
 
-    private fun updateScanStatus(generation: Int) {
-        if (generation != scanGeneration || cleanedUp) {
+    /**
+     * Re-reads cached state for one course (or every course). This is not a scan; it only copies the
+     * cache's current snapshot/checking/failure state into the row.
+     */
+    private fun updateAvailability(courseHash: String?) {
+        if (cleanedUp || !isAdded) {
             return
         }
-        if (rows.any { it.definition != null && !it.scanComplete }) {
-            showStatus(getString(R.string.skill_course_checking))
-        } else {
-            showStatus(null)
+
+        val changed = ArrayList<Int>()
+        for (index in rows.indices) {
+            val row = rows[index]
+            if (row.definition == null) {
+                continue
+            }
+            if (courseHash != null && row.entity.courseHash != courseHash) {
+                continue
+            }
+            rows[index] = row.copy(
+                availability = CourseAvailabilityCache.get(row.entity.courseHash)
+            )
+            changed += index
         }
+
+        for (index in changed) {
+            adapter?.notifyItemChanged(index)
+        }
+        updateAvailabilityStatus()
+    }
+
+    private fun updateAvailabilityStatus() {
+        val checking = rows.any { it.definition != null && it.availability?.isChecking == true }
+        showStatus(if (checking) getString(R.string.skill_course_checking) else null)
     }
 
     private fun updateEmptyState() {
@@ -326,7 +307,7 @@ class CourseManagerFragment : BaseFragment() {
     }
 
     private fun playOrDownload(row: CourseRow) {
-        val snapshot = row.snapshot
+        val snapshot = row.availability?.snapshot
         val definition = row.definition
         if (snapshot == null || definition == null) {
             CourseUi.showMessage(requireContext(), getString(R.string.skill_course_play_blocked))
@@ -477,10 +458,14 @@ class CourseManagerFragment : BaseFragment() {
             return
         }
         cleanedUp = true
-        scanGeneration++
         recoveryDialog?.closeImmediately()
         recoveryDialog = null
-        CourseLibraryEvents.removeListener(libraryListener)
+        CourseAvailabilityCache.removeListener(availabilityListener)
+        findViewById<RecyclerView>(R.id.skill_course_manager_list)?.let { recycler ->
+            for (index in 0 until recycler.childCount) {
+                (recycler.getChildViewHolder(recycler.getChildAt(index)) as? CourseHolder)?.releaseCollage()
+            }
+        }
         CourseUi.removeRefreshListener(refreshListener)
         CourseUi.detachManager(this)
     }
@@ -501,6 +486,21 @@ class CourseManagerFragment : BaseFragment() {
         }
 
         override fun getItemCount(): Int = rows.size
+
+        override fun onViewRecycled(holder: CourseHolder) {
+            holder.releaseCollage()
+            super.onViewRecycled(holder)
+        }
+
+        override fun onViewDetachedFromWindow(holder: CourseHolder) {
+            holder.pauseCollage()
+            super.onViewDetachedFromWindow(holder)
+        }
+
+        override fun onViewAttachedToWindow(holder: CourseHolder) {
+            super.onViewAttachedToWindow(holder)
+            holder.resumeCollage()
+        }
     }
 
     private inner class CourseHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
@@ -516,10 +516,16 @@ class CourseManagerFragment : BaseFragment() {
         private val issueToggle: Button = itemView.findViewById(R.id.skill_course_item_issue_toggle)
         private val more: Button = itemView.findViewById(R.id.skill_course_item_more)
         private val issuesContainer: LinearLayout = itemView.findViewById(R.id.skill_course_item_issues)
+        private val collage: ImageView = itemView.findViewById(R.id.skill_course_item_collage)
+        private val collageScrim: View = itemView.findViewById(R.id.skill_course_item_collage_scrim)
+        private var collageRequest: CourseCardCollage.Handle? = null
+        private var collageSpec: CourseCardCollage.Spec? = null
+        private var collageGeneration = 0
 
         fun bind(row: CourseRow) {
             val definition = row.definition
-            val snapshot = row.snapshot
+            val availability = row.availability
+            val snapshot = availability?.snapshot
 
             name.text = row.entity.courseName
             name.contentDescription = row.entity.courseName
@@ -595,10 +601,10 @@ class CourseManagerFragment : BaseFragment() {
                 }
 
                 snapshot == null -> {
-                    issueSummary.text = if (row.scanComplete) {
-                        getString(R.string.skill_course_check_failed)
-                    } else {
+                    issueSummary.text = if (availability?.isChecking != false) {
                         getString(R.string.skill_course_checking)
+                    } else {
+                        getString(R.string.skill_course_check_failed)
                     }
                     playButton.isEnabled = false
                     playButton.text = getString(R.string.skill_course_play)
@@ -650,6 +656,87 @@ class CourseManagerFragment : BaseFragment() {
             if (definition == null) {
                 issueSummary.text = getString(R.string.skill_course_issue_invalid)
             }
+
+            applyCollage(row)
+        }
+
+        private fun applyCollage(row: CourseRow) {
+            val spec = CourseCardCollage.specFor(
+                courseHash = row.entity.courseHash,
+                snapshot = row.availability?.snapshot
+            )
+
+            if (spec?.key == collageSpec?.key) {
+                // Lock state, issue expansion and other non-availability bindings do not rebuild
+                // the collage. Restart only when the image was released and no work is pending.
+                if (spec != null && collage.drawable == null && collageRequest == null) {
+                    requestCollage(spec)
+                }
+                return
+            }
+
+            cancelCollage()
+            collageSpec = spec
+            if (spec == null) {
+                clearCollageImage()
+                return
+            }
+            requestCollage(spec)
+        }
+
+        private fun requestCollage(spec: CourseCardCollage.Spec) {
+            cancelCollageRequest()
+            val generation = ++collageGeneration
+            collageRequest = CourseCardCollage.request(spec) { bitmap ->
+                if (generation != collageGeneration || spec.key != collageSpec?.key) {
+                    return@request
+                }
+                collageRequest = null
+                if (bitmap == null) {
+                    clearCollageImage()
+                } else {
+                    collage.setImageBitmap(bitmap)
+                    collage.visibility = View.VISIBLE
+                    collageScrim.visibility = View.VISIBLE
+                }
+            }
+        }
+
+        /** Cancels pending decode work for a detached holder, keeping an already loaded image. */
+        fun pauseCollage() {
+            cancelCollageRequest()
+            collageGeneration++
+        }
+
+        /** Re-requests a collage whose decode was canceled while the holder was detached. */
+        fun resumeCollage() {
+            val spec = collageSpec ?: return
+            if (collage.drawable == null && collageRequest == null) {
+                requestCollage(spec)
+            }
+        }
+
+        /** Releases all collage work and references when the holder is recycled or the manager closes. */
+        fun releaseCollage() {
+            cancelCollage()
+            collageSpec = null
+            clearCollageImage()
+        }
+
+        private fun cancelCollage() {
+            cancelCollageRequest()
+            collageGeneration++
+        }
+
+        private fun cancelCollageRequest() {
+            collageRequest?.cancel()
+            collageRequest = null
+        }
+
+        private fun clearCollageImage() {
+            collage.setImageDrawable(null)
+            collage.visibility = View.GONE
+            collageScrim.visibility = View.GONE
         }
 
         private fun issueSummaryText(snapshot: CourseAvailabilitySnapshot): String {

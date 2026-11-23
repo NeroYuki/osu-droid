@@ -18,11 +18,10 @@ import com.osudroid.skillcourse.CourseMap
 import com.osudroid.skillcourse.CourseModPolicy
 import com.osudroid.skillcourse.CoursePlayPreferences
 import com.osudroid.skillcourse.CourseSpeed
-import com.osudroid.skillcourse.recovery.CourseAvailabilityScanner
+import com.osudroid.skillcourse.recovery.CourseAvailabilityCache
+import com.osudroid.skillcourse.recovery.CourseAvailabilityListener
 import com.osudroid.skillcourse.recovery.CourseAvailabilitySnapshot
-import com.osudroid.skillcourse.recovery.CourseLibraryEvents
 import com.osudroid.utils.ModHashMap
-import com.osudroid.utils.async
 import com.osudroid.utils.deserializeMods
 import com.osudroid.utils.mainThread
 import kotlin.math.roundToInt
@@ -31,7 +30,7 @@ import ru.nsu.ccfit.zuev.osuplus.R
 /**
  * Local preflight for a full course run.
  *
- * It rescans availability, keeps authored required mods locked, exposes the course-wide optional
+ * It observes cached availability, keeps authored required mods locked, exposes the course-wide optional
  * whitelist per map through the native mod selector, owns the per-map speedrun rate control,
  * validates every effective map through [CourseModPolicy], and only then delivers a frozen play
  * request.
@@ -44,7 +43,11 @@ class CoursePreflightFragment : BaseFragment() {
     private var snapshot: CourseAvailabilitySnapshot? = null
     private var scanning = false
     private var scanFailed = false
-    private var scanGeneration = 0
+    private val availabilityListener = CourseAvailabilityListener { hash ->
+        if (!cleanedUp && isAdded && (hash == null || hash == entity?.courseHash)) {
+            readAvailability()
+        }
+    }
     private var definitionGeneration = 0
     private var selectionGeneration = 0
     private var cleanedUp = false
@@ -82,7 +85,6 @@ class CoursePreflightFragment : BaseFragment() {
         this.scanFailed = false
         this.policyError = null
         this.notice = null
-        this.scanGeneration = 0
         this.definitionGeneration++
         this.selectionGeneration = 0
         this.cleanedUp = false
@@ -124,7 +126,8 @@ class CoursePreflightFragment : BaseFragment() {
         updateStartState()
 
         applyImeBottomPadding()
-        scanAvailability()
+        CourseAvailabilityCache.addListener(availabilityListener)
+        readAvailability()
     }
 
     /**
@@ -157,40 +160,14 @@ class CoursePreflightFragment : BaseFragment() {
         ViewCompat.requestApplyInsets(root)
     }
 
-    private fun scanAvailability() {
-        val definition = definition ?: return
-        val generation = ++scanGeneration
-        scanning = true
-        scanFailed = false
-        snapshot = null
-        status?.setText(R.string.skill_course_preflight_checking)
+    private fun readAvailability() {
+        val entity = entity ?: return
+        val state = CourseAvailabilityCache.get(entity.courseHash)
+        scanning = state.isChecking
+        scanFailed = state.failure != null
+        snapshot = state.snapshot
         updateSummary()
         updateStartState()
-
-        async {
-            val result = try {
-                CourseAvailabilityScanner.scan(definition)
-            } catch (_: Exception) {
-                null
-            }
-
-            mainThread {
-                if (cleanedUp || !isAdded || generation != scanGeneration) {
-                    return@mainThread
-                }
-
-                if (result != null && result.libraryRevision < CourseLibraryEvents.revision) {
-                    scanAvailability()
-                    return@mainThread
-                }
-
-                scanning = false
-                snapshot = result
-                scanFailed = result == null
-                updateSummary()
-                updateStartState()
-            }
-        }
     }
 
     private fun updateSummary() {
@@ -886,7 +863,7 @@ class CoursePreflightFragment : BaseFragment() {
             return
         }
         cleanedUp = true
-        scanGeneration++
+        CourseAvailabilityCache.removeListener(availabilityListener)
         definitionGeneration++
         selectionGeneration++
         mapRows.clear()

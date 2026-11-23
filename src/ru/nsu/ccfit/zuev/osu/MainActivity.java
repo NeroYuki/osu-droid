@@ -533,8 +533,7 @@ public class MainActivity extends BaseGameActivity implements
         }
 
         LibraryManager.scanDirectory(forceImportedBeatmaps);
-        LibraryManager.loadLibrary();
-        com.osudroid.skillcourse.recovery.CourseLibraryEvents.importCompleted(forceImportedBeatmaps);
+        LibraryManager.loadLibrary(forceImportedBeatmaps);
     }
 
     /** Invoked only after an active course has released its frozen map files. */
