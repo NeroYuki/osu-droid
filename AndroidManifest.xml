@@ -129,7 +129,21 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- file:// URIs matched by .osz extension -->
+            <!-- Portable Skill Course files, including providers using an unknown MIME type. -->
+            <intent-filter android:label="@string/skill_course_import">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="file" android:host="*" android:mimeType="*/*" android:pathPattern=".*\\.odc" />
+                <data android:scheme="content" android:host="*" android:mimeType="*/*" android:pathPattern=".*\\.odc" />
+            </intent-filter>
+            <intent-filter android:label="@string/skill_course_import">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" android:mimeType="application/vnd.osudroid.course+json" />
+                <data android:scheme="content" android:mimeType="application/json" />
+            </intent-filter>
             <intent-filter android:label="@string/act_import_beatmap">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

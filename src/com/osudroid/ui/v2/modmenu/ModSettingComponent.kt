@@ -46,7 +46,10 @@ sealed class ModSettingComponent<TSettingValue, TControlValue : Any>(
     /**
      * The [FormControl] that is used to display this [ModSettingComponent].
      */
+    private var revertingControlValue = false
+
     protected val control = createControl().apply {
+        val formControl = this
         width = FillParent
 
         label = setting.name
@@ -55,7 +58,21 @@ sealed class ModSettingComponent<TSettingValue, TControlValue : Any>(
             setting.valueFormatter?.invoke(setting, convertControlValue(it)) ?: it.toString()
         }
 
-        onValueChanged = {
+        onValueChanged = valueChanged@{
+            if (revertingControlValue) {
+                return@valueChanged
+            }
+
+            // A scoped course session may require this mod's authored settings to stay immutable.
+            // The form itself is disabled too, but reset buttons are child entities and are guarded
+            // here so they cannot bypass the lock.
+            if (!ModMenu.canModifySettings(mod)) {
+                revertingControlValue = true
+                formControl.value = convertSettingValue(setting.value)
+                revertingControlValue = false
+                return@valueChanged
+            }
+
             setting.value = convertControlValue(it)
             ModMenu.queueModChange(mod)
         }

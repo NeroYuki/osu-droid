@@ -65,6 +65,7 @@ public class GlobalManager {
         getSongMenu().setScoringScene(getScoring());
         getGameScene().setScoringScene(getScoring());
         getGameScene().setOldScene(getSongMenu().getScene());
+        com.osudroid.skillcourse.runtime.CourseClient.initialize();
         if (songService != null) {
             songService.stop();
         }

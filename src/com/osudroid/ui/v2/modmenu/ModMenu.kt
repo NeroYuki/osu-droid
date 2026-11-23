@@ -44,6 +44,49 @@ import kotlin.math.*
 import kotlin.reflect.KClass
 import kotlin.reflect.full.createInstance
 
+/**
+ * The two isolated reuse modes of the native mod selector.
+ */
+internal enum class ScopedCourseMode {
+    PLAYER,
+    ALLOWLIST
+}
+
+/**
+ * A scoped course selector session.
+ *
+ * The ordinary selector state is snapshotted by [ModMenu] when this session starts and restored when
+ * it ends. Constraints are deliberately expressed as class sets because mods are identified by their
+ * concrete class in [ModHashMap].
+ */
+internal class ScopedCourseSession(
+    val mode: ScopedCourseMode,
+
+    /** Mods authored by the course map (plus engine-injected choices). These are selected and locked. */
+    val requiredClasses: Set<Class<out Mod>> = emptySet(),
+
+    /** Mods that may optionally be added by the player. */
+    val allowedClasses: Set<Class<out Mod>> = emptySet(),
+
+    /** User-playable mods that remain visible but cannot be selected. */
+    val restrictedClasses: Set<Class<out Mod>> = emptySet(),
+
+    /** Beatmap used only for the session's difficulty preview. The normal song-menu selection is untouched. */
+    val previewBeatmap: BeatmapInfo? = null,
+
+    /** Initial effective mods for player mode. */
+    val initialMods: ModHashMap = ModHashMap(),
+
+    /** Initial selected acronyms for allowlist-authoring mode. */
+    val initialAllowedAcronyms: Set<String> = emptySet(),
+
+    /** Invoked on the engine update thread when explicit Save is pressed. */
+    val onSave: () -> Unit,
+
+    /** Invoked when Cancel or Back is pressed. */
+    val onCancel: () -> Unit
+)
+
 object ModMenu : UIScene() {
 
 
@@ -66,6 +109,8 @@ object ModMenu : UIScene() {
     private val modChangeQueue = LinkedList<Mod>()
     private val modPresetsSection: ModMenuPresetsSection
 
+    private val backButton: UITextButton
+    private val saveButton: UITextButton
     private val customizeButton: UITextButton
     private val customizationMenu: ModCustomizationMenu
     private val selectedModsIndicator: ModsIndicator
@@ -81,6 +126,16 @@ object ModMenu : UIScene() {
     private val scoreMultiplierBadge: StatisticsBadge
 
     private var calculationJob: Job? = null
+    private var calculationGeneration = 0L
+
+    @Volatile
+    private var scopedSession: ScopedCourseSession? = null
+    private val scopedAuthorSelection = LinkedHashSet<String>()
+
+    private var normalEnabledMods = ModHashMap()
+    private var normalToggleMods = emptyMap<Class<out Mod>, Mod>()
+    private var normalPresetsVisible = false
+    private var normalSelectedBeatmap: BeatmapInfo? = null
 
 
     init {
@@ -117,7 +172,7 @@ object ModMenu : UIScene() {
                     origin = Anchor.CenterLeft
                     spacing = 10f
 
-                    +UITextButton().apply {
+                    backButton = UITextButton().apply {
                         text = "Back"
                         leadingIcon = UISprite().apply {
                             textureRegion = ResourceManager.getInstance().getTexture("back-arrow")
@@ -130,6 +185,21 @@ object ModMenu : UIScene() {
                         }
                         onActionCancel = { ResourceManager.getInstance().getSound("click-short")?.play() }
                     }
+
+                    +backButton
+
+                    saveButton = UITextButton().apply {
+                        text = "Save"
+                        isVisible = false
+                        isSelected = true
+                        onActionUp = {
+                            ResourceManager.getInstance().getSound("click-short-confirm")?.play()
+                            scopedSession?.onSave?.invoke()
+                        }
+                        onActionCancel = { ResourceManager.getInstance().getSound("click-short")?.play() }
+                    }
+
+                    +saveButton
 
                     customizeButton = UITextButton().apply {
                         text = "Customize"
@@ -332,6 +402,7 @@ object ModMenu : UIScene() {
     //region Calculation
 
     fun cancelCalculationJob() {
+        calculationGeneration++
         calculationJob?.cancel(CancellationException("Difficulty calculation has been cancelled."))
         calculationJob = null
     }
@@ -339,7 +410,17 @@ object ModMenu : UIScene() {
     private fun parseBeatmap() {
         cancelCalculationJob()
 
-        val selectedBeatmap = GlobalManager.getInstance().selectedBeatmap ?: return
+        val session = scopedSession
+
+        // Allowlist authoring is not an active mod combination, so it has no preview calculation.
+        if (session?.mode == ScopedCourseMode.ALLOWLIST) {
+            return
+        }
+
+        val selectedBeatmap = session?.previewBeatmap ?: GlobalManager.getInstance().selectedBeatmap ?: return
+        val generation = calculationGeneration
+        val isScopedPreview = session != null
+        val previewMods = enabledMods.deepCopy()
 
         calculationJob = async scope@{
 
@@ -356,25 +437,32 @@ object ModMenu : UIScene() {
             }
 
             val songMenu = GlobalManager.getInstance().songMenu
+            ensureActive()
+            if (generation != calculationGeneration || scopedSession !== session) return@scope
 
             if (beatmap == null) {
-                songMenu.setStarsDisplay(0f)
+                if (!isScopedPreview && generation == calculationGeneration && scopedSession === session) {
+                    songMenu.setStarsDisplay(0f)
+                }
                 return@scope
             }
 
-            if (selectedBeatmap.needsDifficultyCalculation) {
+            if (!isScopedPreview && selectedBeatmap.needsDifficultyCalculation) {
                 val newInfo = BeatmapInfo(beatmap, selectedBeatmap.dateImported, true)
                 selectedBeatmap.apply(newInfo)
                 DatabaseManager.beatmapInfoTable.update(newInfo)
             }
 
             // This is needed to give the mod a reference to the beatmap's default difficulty values.
-            enabledMods.ofType<ModDifficultyAdjust>()?.setDefaultDifficulty(beatmap.difficulty)
+            previewMods.ofType<ModDifficultyAdjust>()?.setDefaultDifficulty(beatmap.difficulty)
+            updateThread {
+                if (generation == calculationGeneration && scopedSession === session) {
+                    enabledMods.ofType<ModDifficultyAdjust>()?.setDefaultDifficulty(beatmap.difficulty)
+                    customizationMenu.updateComponents()
+                }
+            }
 
-            customizationMenu.updateComponents()
-
-            // Copy the mods to avoid concurrent modification
-            val mods = enabledMods.deepCopy().values
+            val mods = previewMods.values
             val difficulty = beatmap.difficulty.clone()
             val rate = mods.calculateRate(Double.POSITIVE_INFINITY)
 
@@ -383,13 +471,18 @@ object ModMenu : UIScene() {
             ensureActive()
 
             updateThread {
+                // A later parse, session exit, or restore may have superseded this calculation.
+                if (generation != calculationGeneration || scopedSession !== session) {
+                    return@updateThread
+                }
+
                 arBadge.updateValue(selectedBeatmap.approachRate, difficulty.ar)
                 odBadge.updateValue(selectedBeatmap.overallDifficulty, difficulty.od)
                 csBadge.updateValue(selectedBeatmap.circleSize, difficulty.difficultyCS)
                 hpBadge.updateValue(selectedBeatmap.hpDrainRate, difficulty.hp)
                 bpmBadge.updateValue(selectedBeatmap.mostCommonBPM, selectedBeatmap.mostCommonBPM * rate)
 
-                scoreMultiplierBadge.updateValue(1f, ScoreMultiplierCalculator(beatmap.difficulty).calculateFor(enabledMods.values).toFloat())
+                scoreMultiplierBadge.updateValue(1f, ScoreMultiplierCalculator(beatmap.difficulty).calculateFor(mods).toFloat())
             }
 
             ensureActive()
@@ -401,9 +494,25 @@ object ModMenu : UIScene() {
 
             ensureActive()
 
-            starRatingBadge.rating = attributes.starRating
-            songMenu.changeDimensionInfo(selectedBeatmap)
-            songMenu.setStarsDisplay(attributes.starRating.toFloat())
+            if (generation != calculationGeneration) {
+                return@scope
+            }
+
+            updateThread {
+                if (generation != calculationGeneration || scopedSession !== session) {
+                    return@updateThread
+                }
+
+                starRatingBadge.rating = attributes.starRating
+
+                // Course previews must not modify the ordinary song-menu dimension text, star
+                // display, or music effects. Those are restored/recomputed after the scoped session
+                // ends.
+                if (!isScopedPreview) {
+                    songMenu.changeDimensionInfo(selectedBeatmap)
+                    songMenu.setStarsDisplay(attributes.starRating.toFloat())
+                }
+            }
         }
     }
 
@@ -412,6 +521,14 @@ object ModMenu : UIScene() {
     //region Visibility
 
     override fun show() {
+        val session = scopedSession
+
+        // Keep the session chrome consistent even if an earlier session was abandoned while the
+        // activity was being destroyed.
+        backButton.text = if (session != null) "Cancel" else "Back"
+        saveButton.isVisible = session != null
+        customizeButton.isVisible = session == null || session.mode == ScopedCourseMode.PLAYER
+
         GlobalManager.getInstance().engine.scene.setChildScene(
             this,
             false,
@@ -419,8 +536,9 @@ object ModMenu : UIScene() {
             true
         )
 
-        // Do not show mod presets in multiplayer.
-        modPresetsSection.isVisible = !Multiplayer.isMultiplayer
+        // Do not show mod presets in multiplayer or in any scoped course session. Presets could
+        // otherwise replace a locked authored mod or bypass the course allowlist.
+        modPresetsSection.isVisible = session == null && !Multiplayer.isMultiplayer
 
         if (modPresetsSection.isVisible) {
             modPresetsSection.onSearchTermUpdate(searchInput.value)
@@ -435,10 +553,23 @@ object ModMenu : UIScene() {
     }
 
     override fun back() {
+        val session = scopedSession
+
+        if (session != null) {
+            session.onCancel()
+            return
+        }
+
         back(true)
     }
 
     fun back(updatePlayerMods: Boolean) {
+        val session = scopedSession
+
+        if (session != null) {
+            session.onCancel()
+            return
+        }
 
         if (Multiplayer.isConnected) {
             val gameScene = GlobalManager.getInstance().gameScene
@@ -467,7 +598,199 @@ object ModMenu : UIScene() {
 
     //region Mods
 
+    internal fun hasScopedSession() = scopedSession != null
+
+    internal fun scopedSelectedMods(): ModHashMap = enabledMods.deepCopy()
+
+    internal fun scopedAuthorSelection(): Set<String> = scopedAuthorSelection.toSet()
+
+    internal fun canModifySettings(mod: Mod): Boolean {
+        val session = scopedSession ?: return true
+
+        if (session.mode == ScopedCourseMode.ALLOWLIST) {
+            return false
+        }
+
+        return mod::class.java !in session.requiredClasses
+    }
+
+    /**
+     * Starts a scoped course selector session. The ordinary selector state is snapshotted before any
+     * course-specific state is applied.
+     */
+    internal fun showScoped(session: ScopedCourseSession) {
+        beginScopedSession(session)
+        show()
+    }
+
+    private fun beginScopedSession(session: ScopedCourseSession) {
+        check(scopedSession == null) { "A scoped mod menu session is already active." }
+
+        normalEnabledMods = enabledMods.deepCopy()
+        normalToggleMods = modToggles.associate { it.mod::class.java to it.mod.deepCopy() }
+        normalPresetsVisible = modPresetsSection.isVisible
+        normalSelectedBeatmap = GlobalManager.getInstance().selectedBeatmap
+
+        cancelCalculationJob()
+        synchronized(modChangeQueue) { modChangeQueue.clear() }
+
+        scopedSession = session
+        scopedAuthorSelection.clear()
+
+        when (session.mode) {
+            ScopedCourseMode.PLAYER -> applyScopedPlayerMods(session.initialMods)
+
+            ScopedCourseMode.ALLOWLIST -> {
+                scopedAuthorSelection.addAll(session.initialAllowedAcronyms)
+                applyScopedAuthorSelection()
+            }
+        }
+
+        backButton.text = "Cancel"
+        saveButton.isVisible = true
+        customizeButton.isVisible = session.mode == ScopedCourseMode.PLAYER
+
+        if (session.mode == ScopedCourseMode.ALLOWLIST) {
+            customizationMenu.clearModSettings()
+        }
+
+        updateModButtonVisibility()
+        updateCustomizationMenuEnabledStates()
+
+        // Refresh the initial selected-mod indicator, score multiplier, and customize button state.
+        // The show() call immediately after this starts the preview calculation.
+        onModsChanged()
+    }
+
+    /**
+     * Ends a scoped session and restores the exact ordinary selector state. Call on the engine update
+     * thread while the engine is alive.
+     */
+    internal fun endScopedSession() {
+        if (scopedSession == null) {
+            return
+        }
+
+        scopedSession = null
+        scopedAuthorSelection.clear()
+        backButton.text = "Back"
+        saveButton.isVisible = false
+        customizeButton.isVisible = true
+        customizationMenu.hide()
+
+        restoreNormalModState()
+
+        GlobalManager.getInstance().selectedBeatmap = normalSelectedBeatmap
+
+        val engine = GlobalManager.getInstance().engine
+        val scene = engine?.scene
+        if (scene?.childScene === this) {
+            scene?.clearChildScene()
+        }
+
+        modPresetsSection.isVisible = normalPresetsVisible
+        updateModButtonVisibility()
+        updateCustomizationMenuEnabledStates()
+        onModsChanged()
+    }
+
+    /**
+     * Drops a scoped session without touching the scene or starting calculations. Used only when the
+     * owning activity has already been destroyed and the UI can no longer be refreshed safely.
+     */
+    internal fun abandonScopedSession() {
+        if (scopedSession == null) {
+            return
+        }
+
+        scopedSession = null
+        scopedAuthorSelection.clear()
+        backButton.text = "Back"
+        saveButton.isVisible = false
+        customizeButton.isVisible = true
+        customizationMenu.clearModSettings()
+
+        restoreNormalModState()
+        updateModButtonVisibility()
+        updateCustomizationMenuEnabledStates()
+        customizeButton.isEnabled = !customizationMenu.isEmpty()
+        selectedModsIndicator.mods = enabledMods.values.toList()
+        modPresetsSection.isVisible = normalPresetsVisible
+    }
+
+    private fun applyScopedPlayerMods(mods: ModHashMap) {
+        enabledMods.clear()
+        mods.values.forEach { enabledMods[it::class.java] = it.deepCopy() }
+
+        modToggles.forEach { toggle ->
+            val selected = enabledMods[toggle.mod::class]
+            toggle.isSelected = selected != null
+            toggle.mod = selected ?: toggle.mod::class.createInstance()
+        }
+
+        customizationMenu.clearModSettings()
+        enabledMods.values.forEach { customizationMenu.onModAdded(it) }
+        refreshCompatibility()
+    }
+
+    private fun applyScopedAuthorSelection() {
+        enabledMods.clear()
+        customizationMenu.clearModSettings()
+
+        modToggles.forEach { toggle ->
+            toggle.isSelected = toggle.mod.acronym in scopedAuthorSelection
+            toggle.hasIncompatibility = false
+            toggle.mod = toggle.mod::class.createInstance()
+        }
+
+        refreshScopedAuthorView()
+    }
+
+    private fun refreshCompatibility() {
+        val selected = enabledMods.values.toList()
+
+        modToggles.forEach {
+            it.hasIncompatibility =
+                !it.isSelected && selected.any { mod -> !it.mod.isCompatibleWith(mod) || !mod.isCompatibleWith(it.mod) }
+        }
+    }
+
+    private fun refreshScopedAuthorView() {
+        modToggles.forEach {
+            it.isSelected = it.mod.acronym in scopedAuthorSelection
+            it.hasIncompatibility = false
+        }
+
+        selectedModsIndicator.mods = modToggles.filter { it.isSelected }.map { it.mod }
+    }
+
+    private fun restoreNormalModState() {
+        cancelCalculationJob()
+        synchronized(modChangeQueue) { modChangeQueue.clear() }
+
+        enabledMods.clear()
+        normalEnabledMods.values.forEach { enabledMods[it::class.java] = it.deepCopy() }
+
+        modToggles.forEach { toggle ->
+            val snapshot = normalToggleMods[toggle.mod::class.java]
+            val selected = enabledMods[toggle.mod::class]
+            toggle.isSelected = selected != null
+            toggle.mod = selected ?: snapshot?.deepCopy() ?: toggle.mod::class.createInstance()
+            toggle.isLocked = false
+            toggle.isRestricted = false
+            toggle.isEnabled = true
+        }
+
+        customizationMenu.clearModSettings()
+        enabledMods.values.forEach { customizationMenu.onModAdded(it) }
+    }
+
     fun setMods(mods: RoomMods, isFreeMod: Boolean) {
+        // A scoped course selection owns the mod set until it is explicitly saved or cancelled.
+        if (scopedSession != null) {
+            return
+        }
+
         if (isFreeMod) {
             for ((_, mod) in enabledMods.toList()) {
                 if (mod.isValidForMultiplayerAsFreeMod) {
@@ -515,9 +838,22 @@ object ModMenu : UIScene() {
     }
 
     fun updateModButtonVisibility() {
+        val session = scopedSession
+
         modToggles.forEach {
             it.updateVisibility(searchInput.value)
-            it.applyCompatibilityState()
+
+            when {
+                session == null -> it.applyRestriction(false, false)
+                session.mode == ScopedCourseMode.ALLOWLIST -> it.applyRestriction(false, false)
+                else -> {
+                    val modClass = it.mod::class.java
+                    it.applyRestriction(
+                        locked = modClass in session.requiredClasses,
+                        restricted = modClass in session.restrictedClasses || (!it.isSelected && it.hasIncompatibility)
+                    )
+                }
+            }
         }
 
         // Update section visibility after toggles have been updated since it may not need to be visible anymore.
@@ -525,10 +861,25 @@ object ModMenu : UIScene() {
     }
 
     fun updateCustomizationMenuEnabledStates() {
+        val session = scopedSession
+        val locked = if (session == null || session.mode == ScopedCourseMode.ALLOWLIST) {
+            emptySet()
+        } else {
+            session.requiredClasses
+        }
+
+        customizationMenu.setLockedModClasses(locked)
         customizationMenu.updateComponentEnabledStates()
     }
 
     fun clear() {
+        val session = scopedSession
+
+        if (session != null) {
+            clearScoped(session)
+            return
+        }
+
         cancelCalculationJob()
 
         val room = Multiplayer.room
@@ -554,6 +905,21 @@ object ModMenu : UIScene() {
         }
     }
 
+    private fun clearScoped(session: ScopedCourseSession) {
+        if (session.mode == ScopedCourseMode.ALLOWLIST) {
+            scopedAuthorSelection.clear()
+            refreshScopedAuthorView()
+            updateModButtonVisibility()
+            return
+        }
+
+        val removable = enabledMods.values
+            .filter { it::class.java !in session.requiredClasses }
+            .map { it::class }
+
+        removable.forEach { removeMod(it) }
+    }
+
     fun queueModChange(mod: Mod) = synchronized(modChangeQueue) {
         // Adding to first place in case it is already queued.
         if (modChangeQueue.isEmpty() || modChangeQueue.first() != mod) {
@@ -574,6 +940,15 @@ object ModMenu : UIScene() {
     }
 
     private fun onModsChanged() = synchronized(modChangeQueue) {
+        val session = scopedSession
+
+        if (session?.mode == ScopedCourseMode.ALLOWLIST) {
+            modChangeQueue.clear()
+            refreshScopedAuthorView()
+            updateModButtonVisibility()
+            return
+        }
+
         val enabledMods = enabledMods.values.toList()
         val isRanked = enabledMods.isEmpty() || enabledMods.none { !it.isRanked }
 
@@ -592,12 +967,12 @@ object ModMenu : UIScene() {
                 !it.isSelected && enabledMods.any { m -> !it.mod.isCompatibleWith(m) || !m.isCompatibleWith(it.mod) }
         }
 
-        val selectedBeatmap = GlobalManager.getInstance().selectedBeatmap
-        scoreMultiplierBadge.updateValue(1f, ScoreMultiplierCalculator(selectedBeatmap?.getBeatmapDifficulty()).calculateFor(enabledMods).toFloat())
+        val displayBeatmap = session?.previewBeatmap ?: GlobalManager.getInstance().selectedBeatmap
+        scoreMultiplierBadge.updateValue(1f, ScoreMultiplierCalculator(displayBeatmap?.getBeatmapDifficulty()).calculateFor(enabledMods).toFloat())
 
-        customizeButton.isEnabled = !customizationMenu.isEmpty()
+        customizeButton.isEnabled = session?.mode != ScopedCourseMode.ALLOWLIST && !customizationMenu.isEmpty()
 
-        if (modChangeQueue.any { it is IModApplicableToTrackRate }) {
+        if (session == null && modChangeQueue.any { it is IModApplicableToTrackRate }) {
             GlobalManager.getInstance().songMenu.updateMusicEffects()
         }
         modChangeQueue.clear()
@@ -605,10 +980,25 @@ object ModMenu : UIScene() {
         parseBeatmap()
 
         selectedModsIndicator.mods = enabledMods
-        modPresetsSection.onModsChanged()
+
+        if (session == null) {
+            modPresetsSection.onModsChanged()
+        } else {
+            updateModButtonVisibility()
+            updateCustomizationMenuEnabledStates()
+        }
     }
 
     fun addMod(mod: Mod) {
+        val session = scopedSession
+
+        if (session != null) {
+            when (session.mode) {
+                ScopedCourseMode.ALLOWLIST -> addAllowedMod(mod)
+                ScopedCourseMode.PLAYER -> addPlayerMod(session, mod)
+            }
+            return
+        }
 
         if (mod in enabledMods) {
             return
@@ -635,9 +1025,81 @@ object ModMenu : UIScene() {
         queueModChange(mod)
     }
 
+    private fun addAllowedMod(mod: Mod) {
+        if (!mod.isUserPlayable) {
+            return
+        }
+
+        val toggle = modToggles.find { it.mod::class == mod::class } ?: return
+
+        // Allowlist authoring deliberately keeps an independent acronym set. Incompatible
+        // alternatives such as HR and EZ may both be allowed here.
+        scopedAuthorSelection.add(toggle.mod.acronym)
+        toggle.isSelected = true
+        queueModChange(toggle.mod)
+    }
+
+    private fun addPlayerMod(session: ScopedCourseSession, mod: Mod) {
+        if (!mod.isUserPlayable) {
+            return
+        }
+
+        val modClass = mod::class.java
+
+        if (modClass in session.requiredClasses ||
+            modClass in session.restrictedClasses ||
+            modClass !in session.allowedClasses ||
+            modClass in enabledMods
+        ) {
+            return
+        }
+
+        // Never let ModHashMap.put evict a required authored mod. Compatibility is checked in both
+        // directions against every current mod before insertion, so the put is non-destructive.
+        for (existing in enabledMods.values) {
+            if (!mod.isCompatibleWith(existing) || !existing.isCompatibleWith(mod)) {
+                return
+            }
+        }
+
+        enabledMods[modClass] = mod
+
+        val toggle = modToggles.find { it.mod::class == mod::class }
+
+        if (toggle != null) {
+            toggle.isSelected = true
+            toggle.mod = mod
+        }
+
+        customizationMenu.onModAdded(mod)
+        queueModChange(mod)
+    }
+
     fun removeMod(mod: Mod) = removeMod(mod::class)
 
     fun removeMod(modClass: KClass<out Mod>) {
+        val session = scopedSession
+
+        if (session != null) {
+            when (session.mode) {
+                ScopedCourseMode.ALLOWLIST -> {
+                    val toggle = modToggles.find { it.mod::class == modClass } ?: return
+
+                    if (scopedAuthorSelection.remove(toggle.mod.acronym)) {
+                        toggle.isSelected = false
+                        queueModChange(toggle.mod)
+                    }
+                    return
+                }
+
+                ScopedCourseMode.PLAYER -> {
+                    // Required mods cannot be removed. Settings are locked separately.
+                    if (modClass.java in session.requiredClasses) {
+                        return
+                    }
+                }
+            }
+        }
 
         if (modClass !in enabledMods) {
             return
@@ -687,11 +1149,9 @@ object ModMenu : UIScene() {
         }
 
         override fun onManagedUpdate(deltaTimeSec: Float) {
-            if (counter.isRolling) {
-                valueEntity.text = formatter(counter.currentValue)
-            }
-
             super.onManagedUpdate(deltaTimeSec)
+            // A long first frame can finish the entire roll. Render the settled value too.
+            valueEntity.text = formatter(counter.currentValue)
         }
     }
 

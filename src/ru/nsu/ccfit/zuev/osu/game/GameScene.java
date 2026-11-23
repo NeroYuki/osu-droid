@@ -55,6 +55,7 @@ import com.osudroid.ui.v2.game.FollowPointConnection;
 import com.osudroid.ui.v2.hud.GameplayHUD;
 import com.osudroid.ui.v2.hud.elements.HUDPPCounter;
 import com.osudroid.multiplayer.Multiplayer;
+import com.osudroid.skillcourse.runtime.CourseRuntime;
 
 import com.reco1l.framework.Color4;
 import com.osudroid.GameMode;
@@ -960,7 +961,7 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
             }
 
             GameHelper.setReplayVersion(replay.replayVersion);
-        } else if (mods.contains(ModAutoplay.class)) {
+        } else if (mods.contains(ModAutoplay.class) && !CourseRuntime.isRunning()) {
             replay = null;
         } else {
             replay.reserveMovementCapacity(lastObjectEndTime);
@@ -992,7 +993,6 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
         stat.setMod(lastMods);
         stat.migrateLegacyMods(parsedBeatmap.getDifficulty());
         stat.calculateModScoreMultiplier(parsedBeatmap.getDifficulty());
-        stat.canFail = false;
 
         var rawDifficulty = parsedBeatmap.getDifficulty();
         float multiplier = 1 + Math.min(rawDifficulty.od, 10) / 10f + Math.min(rawDifficulty.hp, 10) / 10f;
@@ -1004,7 +1004,7 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
         stat.setBeatmapNoteCount(objects.length);
         stat.setV1MaxScore(parsedBeatmap.calculateMaximumScore(null));
 
-        if (!Multiplayer.isMultiplayer && !replaying && OnlineManager.getInstance().isStayOnline() && replay != null) {
+        if (!CourseRuntime.isRunning() && !Multiplayer.isMultiplayer && !replaying && OnlineManager.getInstance().isStayOnline() && replay != null) {
             ArrayList<String> response = null;
 
             try {
@@ -1045,6 +1045,11 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
     }
 
     public void restartGame() {
+        if (CourseRuntime.isRunning()) {
+            CourseRuntime.requestRetry();
+            quit();
+            return;
+        }
         startGame(null, null, null);
     }
 
@@ -1147,9 +1152,14 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
         return cancelLoading(true);
     }
 
+    public int getLoadingRequestId() {
+        return loadingRequestId.get();
+    }
+
     private CompletableFuture<Unit> cancelLoading(boolean invalidatePendingStart) {
         if (invalidatePendingStart) {
             loadingRequestId.incrementAndGet();
+            isReadyToStart = false;
         }
 
         var gameLoadingJob = this.gameLoadingJob;
@@ -1189,7 +1199,6 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
         stat.setMod(lastMods);
         stat.migrateLegacyMods(parsedBeatmap.getDifficulty());
         stat.calculateModScoreMultiplier(parsedBeatmap.getDifficulty());
-        stat.canFail = false;
 
         float difficultyScoreMultiplier = 1 + Math.min(parsedBeatmap.getDifficulty().od, 10) / 10f +
                 Math.min(parsedBeatmap.getDifficulty().hp, 10) / 10f;
@@ -1199,6 +1208,10 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
 
         stat.setDiffModifier(difficultyScoreMultiplier);
         stat.setBeatmapNoteCount(objects.length);
+        CourseRuntime.onMapPrepared(stat);
+        if (com.osudroid.skillcourse.runtime.CourseResults.isReplayingComponent()) {
+            stat.canFail = false;
+        }
         stat.setV1MaxScore(parsedBeatmap.calculateMaximumScore(null));
 
         GameHelper.setHardRock(lastMods.ofType(ModHardRock.class));
@@ -1564,6 +1577,12 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
 
         engine.setScene(scene);
         engine.getOverlay().attachChild(hud, 0);
+        if (!replaying && !startedFromHUDEditor) {
+            CourseRuntime.onMapStarted(this);
+            if (CourseRuntime.isRunning()) {
+                fgScene.attachChild(new com.osudroid.skillcourse.runtime.CourseHudOverlay(this));
+            }
+        }
 
         if (isHUDEditorMode) {
             ToastLogger.showText(R.string.hudEditor_back_for_menu, false);
@@ -1582,6 +1601,10 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
 
     private void update(final float dt) {
         if (!isReadyToStart) {
+            return;
+        }
+        if (replaying && com.osudroid.skillcourse.runtime.CourseResults.shouldStopReplay((long) (gameplayClock.getCurrentTime() * 1000))) {
+            quit();
             return;
         }
 
@@ -2034,13 +2057,15 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
             autoCursor.moveToObject(judgeableObject, gameplayClock.getCurrentTime(), this);
         }
 
-        if (isPerfectFailConditionMet()) {
+        if (isPerfectFailConditionMet() && CourseRuntime.allowsNativeFailure() && !CourseRuntime.shouldFinishMap()) {
             gameover();
 
-            if (!Multiplayer.isMultiplayer) {
+            if (!Multiplayer.isMultiplayer && !CourseRuntime.isRunning()) {
                 restartGame();
             }
         }
+
+        CourseRuntime.flushEvents(stat);
 
         var mutedMod = GameHelper.getMuted();
 
@@ -2059,7 +2084,7 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
             );
         }
 
-        if (shouldBePunished || (!isGameOver && objectIndex >= objects.length && activeObjects.isEmpty() && leadOut > 2)) {
+        if (CourseRuntime.shouldFinishMap() || shouldBePunished || (!isGameOver && objectIndex >= objects.length && activeObjects.isEmpty() && (leadOut > 2 || CourseRuntime.isRunning()))) {
 
             // Reset the game to continue the HUD editor session.
             if (startedFromHUDEditor && isHUDEditorMode) {
@@ -2110,7 +2135,20 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
             cancelStoryboardLoading();
             cancelVideoLoading();
 
-            if (scoringScene != null && !startedFromHUDEditor) {
+            var courseReplayResult = replaying ? com.osudroid.skillcourse.runtime.CourseResults.consumeReplayReturn() : null;
+            if (CourseRuntime.isRunning() || courseReplayResult != null) {
+                hud.detachSelf();
+                stopLoopingSamples();
+                gameplayClock.stop();
+                GlobalManager.getInstance().getSongService().stop();
+            }
+            if (courseReplayResult != null && scoringScene != null) {
+                scoringScene.loadCourse(courseReplayResult);
+                engine.setScene(scoringScene.getScene());
+            } else if (CourseRuntime.isRunning() && !replaying && !startedFromHUDEditor) {
+                CourseRuntime.onMapFinished(stat, lastBeatmapInfo, replayPath);
+                engine.setScene(scene);
+            } else if (scoringScene != null && !startedFromHUDEditor) {
                 if (spectatorDataManager != null) {
                     spectatorDataManager.setGameEnded(true);
                 }
@@ -2255,6 +2293,9 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
 
     public void skip(boolean force)
     {
+        if (CourseRuntime.isRunning() && !force) {
+            return;
+        }
         if (Multiplayer.isConnected()) {
             Multiplayer.roomScene.getChat().hide();
         }
@@ -2357,6 +2398,19 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
     }
 
     public void quit() {
+        if (CourseRuntime.isRunning()) {
+            if (CourseRuntime.isCourseLoading()) {
+                CourseRuntime.onLoadingCanceled();
+            } else {
+                CourseRuntime.requestEnd("aborted", "The player left the course.");
+                paused = false;
+                scene.setIgnoreUpdate(false);
+                hud.setIgnoreUpdate(false);
+                gameplayClock.stop();
+                update(0);
+                return;
+            }
+        }
         // Disable historical event processing for more efficient ACTION_MOVE reports, since frequent reports are
         // not that relevant outside gameplay.
         var touchOptions = new TouchOptions();
@@ -2408,6 +2462,11 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
         engine.setScene(oldScene);
         releaseVideo();
 
+        var courseReplayResult = com.osudroid.skillcourse.runtime.CourseResults.consumeReplayReturn();
+        if (courseReplayResult != null) {
+            com.osudroid.skillcourse.runtime.CourseResults.show(courseReplayResult);
+        }
+
         // Resume difficulty calculation.
         DifficultyCalculationManager.calculateDifficulties();
     }
@@ -2428,6 +2487,9 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
         }
 
         boolean writeReplay = objectId != -1 && replay != null && !replaying;
+        if (!replaying && objectId != -1 && score >= 0) {
+            CourseRuntime.recordFinalJudgment(objectId, score, (long) (gameplayClock.getCurrentTime() * 1000));
+        }
         if (score == 0) {
             if (stat.getCombo() > 30) {
                 var sound = ResourceManager.getInstance().getCustomSound("combobreak", 1);
@@ -2445,7 +2507,7 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
             if (GameHelper.isPerfect()) {
                 gameover();
 
-                if (!Multiplayer.isMultiplayer)
+                if (!Multiplayer.isMultiplayer && !CourseRuntime.isRunning())
                     restartGame();
             }
             if (GameHelper.isSuddenDeath()) {
@@ -2606,6 +2668,10 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
 
         VibratorManager.INSTANCE.sliderVibration();
 
+        if (!replaying && type == GameObjectListener.SLIDER_END && !incrementCombo) {
+            CourseRuntime.recordSliderEndMiss(id, (long) (gameplayClock.getCurrentTime() * 1000));
+        }
+
         // Whole slider was missed.
         if (score == 0) {
             createHitEffect(judgementPos, "hit0", color);
@@ -2615,6 +2681,9 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
 
         // Nested object was missed.
         if (score == -1) {
+            if (!replaying) {
+                CourseRuntime.recordSliderBreak(id, (long) (gameplayClock.getCurrentTime() * 1000));
+            }
             if (stat.getCombo() > 30) {
                 var sound = ResourceManager.getInstance().getCustomSound("combobreak", 1);
                 if (sound != null) {
@@ -2959,6 +3028,17 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
 
     public void pause() {
 
+        if (CourseRuntime.isCourseLoading()) {
+            CourseRuntime.onLoadingCanceled();
+            return;
+        }
+        if (CourseRuntime.isRunning() && !CourseRuntime.isPauseAllowed()) {
+            if (CourseRuntime.confirmNoPauseExit()) {
+                quit();
+            }
+            return;
+        }
+
         if (paused) {
             return;
         }
@@ -3002,6 +3082,8 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
         gameplayClock.stop();
         paused = true;
 
+        CourseRuntime.onPause();
+
         scene.setIgnoreUpdate(true);
         hud.setIgnoreUpdate(true);
 
@@ -3014,8 +3096,22 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
     }
 
     public void gameover() {
+        if (!CourseRuntime.allowsNativeFailure()) {
+            return;
+        }
 
         if (isGameOver) {
+            return;
+        }
+        if (CourseRuntime.isRunning()) {
+            CourseRuntime.flushEvents(stat);
+            CourseRuntime.requestEnd("failed", "The player failed the map.");
+            // The next update must reach the shared course completion path instead of
+            // re-entering the native HP failure branch and returning every frame.
+            gameStarted = false;
+            gameplayClock.stop();
+            stopLoopingSamples();
+            isGameOver = true;
             return;
         }
         isGameOver = true;
@@ -3149,6 +3245,8 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
 
         UIEngine.getCurrent().getOverlay().getChildScene().back();
         paused = false;
+
+        CourseRuntime.onResume();
 
         if (isGameOver) {
             quit();
@@ -3575,6 +3673,7 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
     }
 
     private void updatePPValue(int objectId) {
+        if (CourseRuntime.isRunning()) return;
         if (Config.isHideInGameUI() || !isHUDEditorMode && !OsuSkin.get().getHUDSkinData().hasElement(HUDPPCounter.class)) {
             return;
         }

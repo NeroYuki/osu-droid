@@ -29,7 +29,7 @@ import ru.nsu.ccfit.zuev.osu.scoring.Replay
 /**
  * The current schema version of [DroidDatabase].
  */
-const val DATABASE_VERSION = 5
+const val DATABASE_VERSION = 7
 
 /**
  * The osu!droid database manager.
@@ -77,6 +77,29 @@ object DatabaseManager {
     @JvmStatic
     val modPresetTable
         get() = database.getModPresetTable()
+
+    /**
+     * Get the Skill Course table DAO.
+     */
+    @JvmStatic
+    val courseTable
+        get() = database.getCourseTable()
+
+    /**
+     * Get the Skill Course local play preferences DAO.
+     */
+    @JvmStatic
+    val coursePlayPreferenceTable
+        get() = database.getCoursePlayPreferenceTable()
+
+    /**
+     * Runs [block] in a database transaction.
+     */
+    @JvmStatic
+    fun <T> runInTransaction(block: () -> T): T {
+        val callable = java.util.concurrent.Callable<T> { block() }
+        return database.runInTransaction(callable)
+    }
 
     /**
      * The path to the database file.
@@ -359,7 +382,10 @@ object DatabaseManager {
         BeatmapSetCollection::class,
         BeatmapSetCollection_BeatmapSetInfo::class,
         BlockArea::class,
-        ModPreset::class
+        ModPreset::class,
+        SkillCourseEntity::class,
+        SkillCourseAttemptEntity::class,
+        CoursePlayPreferenceEntity::class
     ]
 )
 abstract class DroidDatabase : RoomDatabase() {
@@ -375,4 +401,8 @@ abstract class DroidDatabase : RoomDatabase() {
     abstract fun getBlockAreaTable(): IBlockAreaDAO
 
     abstract fun getModPresetTable(): IModPresetDAO
+
+    abstract fun getCourseTable(): ICourseDAO
+
+    abstract fun getCoursePlayPreferenceTable(): ICoursePlayPreferenceDAO
 }

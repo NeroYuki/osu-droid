@@ -229,6 +229,41 @@ public class LibraryManager {
     }
 
 
+    /**
+     * Removes rows whose `.osu` file no longer exists inside directories that were explicitly
+     * reparsed. This handles a renamed difficulty, whose new `(filename, setDirectory)` key would
+     * otherwise be inserted alongside the old row by the REPLACE policy.
+     */
+    private static void reconcileForcedDirectories(@Nullable Collection<String> forceDirectories,
+                                                   Collection<BeatmapInfo> parsedBeatmaps) {
+        if (forceDirectories == null || forceDirectories.isEmpty()) {
+            return;
+        }
+
+        for (var directory : forceDirectories) {
+            var expectedFilenames = new HashSet<String>();
+
+            for (var beatmap : parsedBeatmaps) {
+                if (directory.equals(beatmap.getSetDirectory())) {
+                    expectedFilenames.add(beatmap.getFilename());
+                }
+            }
+
+            try {
+                var dao = DatabaseManager.getBeatmapInfoTable();
+
+                for (var existing : dao.getBeatmapsInSet(directory)) {
+                    if (!expectedFilenames.contains(existing.getFilename())) {
+                        dao.deleteByKey(existing.getFilename(), directory);
+                    }
+                }
+            } catch (Exception e) {
+                Log.e("LibraryManager", "Failed to reconcile forced beatmap directory: " + directory, e);
+            }
+        }
+    }
+
+
     private static final class LibraryDatabaseManager {
 
 
@@ -295,7 +330,10 @@ public class LibraryManager {
             }
 
             try {
-                DatabaseManager.getBeatmapInfoTable().insertAll(pendingBeatmaps);
+                var parsedBeatmaps = new ArrayList<>(pendingBeatmaps);
+
+                DatabaseManager.getBeatmapInfoTable().insertAll(parsedBeatmaps);
+                reconcileForcedDirectories(forceUpdateDirectories, parsedBeatmaps);
                 pendingBeatmaps.clear();
             } catch (Exception e) {
                 Log.e("LibraryManager", "Failed to insert beatmaps into database.", e);

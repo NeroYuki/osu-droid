@@ -25,5 +25,7 @@ package com.osudroid.mods
  * the purpose it serves.
  */
 class ModOldNightCore : ModNightCore() {
-    init { trackRateMultiplier = 44.1f * 1.5f / 48 }
+    // Kept as a plain override so the historical audio-frequency-dependent rate is not rounded by
+    // the native customization setting that ModNightCore exposes for serialization.
+    override var trackRateMultiplier = 44.1f * 1.5f / 48
 }

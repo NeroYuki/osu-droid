@@ -8,6 +8,7 @@ import java.util.Random;
 
 import com.osudroid.mods.ModPrecise;
 import com.osudroid.mods.ModScoreV2;
+import com.osudroid.skillcourse.runtime.CourseRuntime;
 import com.osudroid.multiplayer.api.data.RoomTeam;
 import com.osudroid.multiplayer.api.data.WinCondition;
 import com.osudroid.data.ScoreInfo;
@@ -142,6 +143,9 @@ public class StatisticV2 implements Serializable {
     }
 
     public void changeHp(final float amount) {
+        if (CourseRuntime.ignoreNativeHp()) {
+            return;
+        }
         hp += amount;
         if (hp < 0) {
             hp = 0;
@@ -155,6 +159,11 @@ public class StatisticV2 implements Serializable {
             hp = 1;
             isAlive = true;
         }
+    }
+
+    /** Displays the separately owned course gauge without applying native healing/life rules. */
+    public void setCourseHp(float normalizedHp) {
+        hp = Math.max(0, Math.min(1, normalizedHp));
     }
 
     public long getTotalScore() {

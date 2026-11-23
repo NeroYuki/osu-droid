@@ -88,6 +88,12 @@ import ru.nsu.ccfit.zuev.skins.SkinLayout;
 
 public class SongMenu implements IUpdateHandler, MenuItemListener,
         IScrollBarListener {
+    private String courseSavedFilter;
+    private SortOrder courseSavedOrder;
+    private boolean courseSavedFavorites;
+    private List<String> courseSavedLimit;
+    private String courseSavedSelection;
+    private Rectangle courseManagerButton;
     public UIScene scene;
     public UIContainer frontLayer = new UIContainer();
     SortOrder sortOrder = SortOrder.Title;
@@ -223,7 +229,7 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
         board = new ScoreBoard(scene, backLayer, this);
 
 //        float oy = 10;
-        for (final BeatmapSetInfo i : LibraryManager.getLibrary()) {
+        for (final BeatmapSetInfo i : com.osudroid.skillcourse.runtime.CourseView.filterSets(LibraryManager.getLibrary())) {
             final BeatmapSetItem item = new BeatmapSetItem(this, i);
             items.add(item);
             item.attachToScene(scene, backLayer);
@@ -231,6 +237,24 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
         }
         sortOrder = SortOrder.Title;
         sort();
+
+        if (courseManagerButton != null) {
+            courseManagerButton.detachSelf();
+        }
+        courseManagerButton = new Rectangle(Config.getRES_WIDTH() - 190, 10, 180, 48) {
+            @Override
+            public boolean onAreaTouched(TouchEvent event, float x, float y) {
+                if (event.isActionUp()) {
+                    Execution.mainThread(() -> com.osudroid.skillcourse.ui.CourseUi.showManager());
+                }
+                return true;
+            }
+        };
+        courseManagerButton.setColor(0.12f, 0.16f, 0.25f, 0.95f);
+        Text courseLabel = new Text(16, 8, ResourceManager.getInstance().getFont("smallFont"), "Skill Courses");
+        courseManagerButton.attachChild(courseLabel);
+        frontLayer.attachChild(courseManagerButton);
+        scene.registerTouchArea(courseManagerButton);
 
         if (items.size() == 0) {
             final Text text = new Text(0, 0, ResourceManager.getInstance()
@@ -1071,6 +1095,9 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
 
     @Override
     public void selectBeatmap(final BeatmapInfo beatmapInfo, boolean reloadBG) {
+        if (!com.osudroid.skillcourse.runtime.CourseView.prepareSelection(beatmapInfo)) {
+            return;
+        }
 
         // Playing corresponding audio for the selected track.
         var selectedAudio = selectedBeatmap != null ? selectedBeatmap : GlobalManager.getInstance().getSelectedBeatmap();
@@ -1282,6 +1309,12 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
     }
 
     private void back(boolean resetMultiplayerBeatmap) {
+
+        if (com.osudroid.skillcourse.runtime.CourseView.isActive() && !Multiplayer.isMultiplayer) {
+            com.osudroid.skillcourse.runtime.CourseView.exit();
+            return;
+        }
+        com.osudroid.skillcourse.runtime.CourseView.cancelPendingEnter();
 
         if (Multiplayer.isMultiplayer) {
             if (resetMultiplayerBeatmap) {
@@ -1561,7 +1594,7 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
             items.clear();
             switch (type) {
                 case MapSet:
-                    for (final BeatmapSetInfo i : LibraryManager.getLibrary()) {
+                    for (final BeatmapSetInfo i : com.osudroid.skillcourse.runtime.CourseView.filterSets(LibraryManager.getLibrary())) {
                         final BeatmapSetItem item = new BeatmapSetItem(this, i);
                         items.add(item);
                         item.attachToScene(scene, backLayer);
@@ -1569,7 +1602,7 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
                     }
                     break;
                 case SingleDiff:
-                    for (final BeatmapSetInfo i : LibraryManager.getLibrary()) {
+                    for (final BeatmapSetInfo i : com.osudroid.skillcourse.runtime.CourseView.filterSets(LibraryManager.getLibrary())) {
                         for (int j = 0; j < i.getCount(); j++) {
                             final BeatmapSetItem item = new BeatmapSetItem(this, i, j);
                             items.add(item);
@@ -1595,6 +1628,32 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
         if (strs.length == 2) {
             beatmapDifficultyText.setText(strs[0] + "Stars: " + GameHelper.Round(star, 2));
         }
+    }
+
+    public void enterCourseView() {
+        if (courseSavedOrder == null) {
+            courseSavedFilter = filterText;
+            courseSavedOrder = sortOrder;
+            courseSavedFavorites = favsOnly;
+            courseSavedLimit = limitC == null ? null : new ArrayList<>(limitC);
+            courseSavedSelection = selectedBeatmap == null ? null : selectedBeatmap.getMD5();
+        }
+        reload();
+        setFilter("", SortOrder.Title, false, null);
+        show();
+    }
+
+    public void restoreCourseView() {
+        if (courseSavedOrder == null) {
+            return;
+        }
+        SortOrder order = courseSavedOrder;
+        courseSavedOrder = null;
+        reload();
+        setFilter(courseSavedFilter, order, courseSavedFavorites, courseSavedLimit);
+        BeatmapInfo previous = courseSavedSelection == null ? null : LibraryManager.findBeatmapByMD5(courseSavedSelection);
+        if (previous != null) selectBeatmap(previous, true);
+        show();
     }
 
     private void reSelectItem(String beatmapFilename) {

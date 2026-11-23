@@ -1,0 +1,23 @@
+// Scope compilation as well as execution: unrelated legacy framework tests do not compile at this HEAD.
+gradle.projectsEvaluated {
+    def testPaths = [
+        'tests/test/kotlin/com/osudroid/skillcourse',
+        'tests/test/kotlin/com/osudroid/data'
+    ].collect { rootProject.file(it) }
+    def testIncludes = [
+        'com/osudroid/skillcourse/**',
+        'com/osudroid/beatmaplisting/BeatmapDownloadTokenTest.kt',
+        'com/osudroid/data/MigrationTest.kt'
+    ]
+    def javaSources = rootProject.android.sourceSets.getByName('test').java
+    def kotlinSources = rootProject.kotlin.sourceSets.getByName('test').kotlin
+    javaSources.setSrcDirs(testPaths)
+    kotlinSources.setSrcDirs(testPaths)
+    javaSources.setIncludes(testIncludes)
+    kotlinSources.setIncludes(testIncludes)
+    // Android's Kotlin source discovery uses source directories, ignoring their include patterns.
+    // Add the downloader ownership test explicitly without pulling in legacy mirror tests.
+    rootProject.tasks.named('compileDebugUnitTestKotlin').configure {
+        source(rootProject.file('tests/test/kotlin/com/osudroid/beatmaplisting/BeatmapDownloadTokenTest.kt'))
+    }
+}

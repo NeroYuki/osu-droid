@@ -2,6 +2,9 @@ package com.osudroid.ui.v2.hud.elements
 
 import com.osudroid.ui.v2.hud.HUDElement
 import com.osudroid.ui.v2.SpriteFont
+import com.osudroid.skillcourse.runtime.CourseRuntime
+import com.reco1l.andengine.text.UIText
+import ru.nsu.ccfit.zuev.osu.ResourceManager
 import com.rian.framework.RollingLongCounter
 import ru.nsu.ccfit.zuev.osu.game.GameScene
 import ru.nsu.ccfit.zuev.skins.OsuSkin
@@ -12,6 +15,11 @@ import java.util.Locale
 class HUDScoreCounter : HUDElement() {
 
     private val sprite = SpriteFont(OsuSkin.get().scorePrefix)
+    private val courseSign = UIText().apply {
+        font = ResourceManager.getInstance().getFont("smallFont")
+        text = "-"
+        isVisible = false
+    }
     private val format = DecimalFormat("00000000", DecimalFormatSymbols(Locale.US))
 
     private var value = 0L
@@ -35,15 +43,24 @@ class HUDScoreCounter : HUDElement() {
 
         registerUpdateHandler(counter)
         attachChild(sprite)
+        attachChild(courseSign)
         onContentChanged()
     }
 
     override fun onGameplayUpdate(game: GameScene, secondsElapsed: Float) {
-        counter.targetValue = game.stat.totalScoreWithMultiplier
+        if (CourseRuntime.scoringMode() == "exscore") {
+            val raw = CourseRuntime.liveExScore()
+            courseSign.isVisible = raw < 0
+            courseSign.x = -courseSign.width - 4f
+            value = if (raw < 0) -raw else raw
+        } else {
+            courseSign.isVisible = false
+            counter.targetValue = game.stat.totalScoreWithMultiplier
+        }
     }
 
     override fun onManagedUpdate(deltaTimeSec: Float) {
-        value = counter.currentValue
+        if (CourseRuntime.scoringMode() != "exscore") value = counter.currentValue
 
         super.onManagedUpdate(deltaTimeSec)
     }

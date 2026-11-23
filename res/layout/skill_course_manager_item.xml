@@ -1,0 +1,188 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/skill_course_item_root"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginBottom="8dp"
+    android:background="@drawable/rounded_rect"
+    android:backgroundTint="#1E1E2E"
+    android:orientation="vertical"
+    android:paddingBottom="4dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingLeft="14dp"
+        android:paddingTop="6dp"
+        android:paddingRight="2dp">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/skill_course_item_name"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="2"
+                android:textColor="#FFF"
+                android:textSize="16sp"
+                tools:text="Starter Course" />
+
+            <TextView
+                android:id="@+id/skill_course_item_author"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="#FFB2B2CC"
+                android:textSize="12sp"
+                tools:text="by Course Author" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/skill_course_item_lock"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginLeft="8dp"
+            android:textColor="#FF9C9CC4"
+            android:textSize="12sp"
+            tools:text="Locked" />
+
+        <Button
+            android:id="@+id/skill_course_item_more"
+            style="@style/button_borderless"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:contentDescription="@string/skill_course_more"
+            android:gravity="center"
+            android:padding="0dp"
+            android:text="⋮"
+            android:textColor="#FFF"
+            android:textSize="22sp" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:paddingLeft="14dp"
+        android:paddingRight="14dp">
+
+        <TextView
+            android:id="@+id/skill_course_item_map_count"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="#FFB2B2CC"
+            android:textSize="12sp"
+            tools:text="12 maps" />
+
+        <TextView
+            android:id="@+id/skill_course_item_issue_summary"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginLeft="10dp"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="2"
+            android:textColor="#FFF1B2B2"
+            android:textSize="12sp"
+            tools:text="2 missing · 1 outdated" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/skill_course_item_saved_mods"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:paddingLeft="14dp"
+        android:paddingTop="2dp"
+        android:paddingRight="14dp"
+        android:textColor="#FF8C8CB4"
+        android:textSize="11sp"
+        android:visibility="gone"
+        tools:text="Saved mods: DA (CS5, AR9)"
+        tools:visibility="visible" />
+
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:divider="@drawable/divider"
+            android:orientation="horizontal"
+            android:showDividers="middle">
+
+            <Button
+                android:id="@+id/skill_course_item_membership"
+                style="@style/button_borderless"
+                android:layout_width="wrap_content"
+                android:layout_height="48dp"
+                android:drawablePadding="6dp"
+                android:gravity="center"
+                android:paddingHorizontal="12dp"
+                android:textSize="13sp"
+                tools:text="Add selected map" />
+
+            <Button
+                android:id="@+id/skill_course_item_view"
+                style="@style/button_borderless"
+                android:layout_width="wrap_content"
+                android:layout_height="48dp"
+                android:contentDescription="@string/skill_course_view"
+                android:gravity="center"
+                android:paddingHorizontal="14dp"
+                android:text="@string/skill_course_view"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/skill_course_item_play"
+                style="@style/button_borderless"
+                android:layout_width="wrap_content"
+                android:layout_height="48dp"
+                android:drawableLeft="@drawable/play_arrow_24px"
+                android:drawablePadding="6dp"
+                android:gravity="center"
+                android:paddingHorizontal="12dp"
+                android:text="@string/skill_course_play"
+                android:textColor="#FFBFBF"
+                android:textSize="13sp"
+                app:drawableTint="#FFBFBF" />
+
+            <Button
+                android:id="@+id/skill_course_item_issue_toggle"
+                style="@style/button_borderless"
+                android:layout_width="wrap_content"
+                android:layout_height="48dp"
+                android:gravity="center"
+                android:paddingHorizontal="12dp"
+                android:textSize="13sp"
+                android:visibility="gone"
+                tools:text="Show issues (3)"
+                tools:visibility="visible" />
+        </LinearLayout>
+    </HorizontalScrollView>
+
+    <LinearLayout
+        android:id="@+id/skill_course_item_issues"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingLeft="10dp"
+        android:paddingTop="2dp"
+        android:paddingRight="10dp"
+        android:paddingBottom="4dp"
+        android:visibility="gone" />
+
+</LinearLayout>

@@ -329,4 +329,189 @@ class MigrationTest {
             }
         }
     }
+
+    @Test
+    @Throws(IOException::class)
+    fun `Test migration from version 5 to 6 preserves existing rows and history`() {
+        helper.createDatabase(testDb, 5).use {
+            it.execSQL(
+                "INSERT INTO BeatmapInfo (filename, md5, audioFilename, setDirectory, title, titleUnicode, " +
+                    "artist, artistUnicode, creator, version, tags, source, dateImported, approachRate, " +
+                    "overallDifficulty, circleSize, hpDrainRate, bpmMax, bpmMin, mostCommonBPM, length, " +
+                    "previewTime, hitCircleCount, sliderCount, spinnerCount, maxCombo, epilepsyWarning) VALUES " +
+                    "('map.osu', 'md5', 'audio.mp3', 'set', 'Title', 'TitleU', 'Artist', 'ArtistU', " +
+                    "'Mapper', 'Diff', 'tags', 'source', 123, 9.0, 8.0, 4.0, 6.0, 60.0, 0.0, 60.0, " +
+                    "1000, 0, 10, 5, 1, 20, 1)"
+            )
+
+            it.execSQL(
+                "INSERT INTO ScoreInfo (beatmapMD5, playerName, replayFilename, mods, score, maxCombo, " +
+                    "mark, hit300k, hit300, hit100k, hit100, hit50, misses, time, needsScoreMigration) VALUES " +
+                    "('md5', 'player', 'replay.odr', '[]', 1234, 10, 'S', 1, 2, 1, 3, 0, 4, 123456789, 0)"
+            )
+
+            it.execSQL("INSERT INTO BeatmapSetCollection (name) VALUES ('collection')")
+            it.execSQL(
+                "INSERT INTO BeatmapSetCollection_BeatmapSetInfo (collectionName, setDirectory) " +
+                    "VALUES ('collection', 'set')"
+            )
+            it.execSQL(
+                "INSERT INTO BeatmapOptions (setDirectory, isFavorite, offset) VALUES ('set', 1, 42)"
+            )
+            it.execSQL(
+                "INSERT INTO ModPreset (name, serializedMods) VALUES ('preset', '[]')"
+            )
+        }
+
+        val db = helper.runMigrationsAndValidate(testDb, 6, true, MIGRATION_5_6)
+
+        db.query("SELECT filename, md5, title, hitCircleCount, sliderCount, spinnerCount FROM BeatmapInfo").use {
+            Assert.assertTrue(it.moveToFirst())
+            Assert.assertEquals("map.osu", it.getString(0))
+            Assert.assertEquals("md5", it.getString(1))
+            Assert.assertEquals("Title", it.getString(2))
+            Assert.assertEquals(10, it.getInt(3))
+            Assert.assertEquals(5, it.getInt(4))
+            Assert.assertEquals(1, it.getInt(5))
+            Assert.assertFalse(it.moveToNext())
+        }
+
+        db.query("SELECT score, playerName, mods, needsScoreMigration FROM ScoreInfo").use {
+            Assert.assertTrue(it.moveToFirst())
+            Assert.assertEquals(1234, it.getInt(0))
+            Assert.assertEquals("player", it.getString(1))
+            Assert.assertEquals("[]", it.getString(2))
+            Assert.assertEquals(0, it.getInt(3))
+            Assert.assertFalse(it.moveToNext())
+        }
+
+        db.query("SELECT name FROM BeatmapSetCollection").use {
+            Assert.assertTrue(it.moveToFirst())
+            Assert.assertEquals("collection", it.getString(0))
+        }
+
+        db.query("SELECT collectionName, setDirectory FROM BeatmapSetCollection_BeatmapSetInfo").use {
+            Assert.assertTrue(it.moveToFirst())
+            Assert.assertEquals("collection", it.getString(0))
+            Assert.assertEquals("set", it.getString(1))
+        }
+
+        db.query("SELECT setDirectory, isFavorite, offset FROM BeatmapOptions").use {
+            Assert.assertTrue(it.moveToFirst())
+            Assert.assertEquals("set", it.getString(0))
+            Assert.assertEquals(1, it.getInt(1))
+            Assert.assertEquals(42, it.getInt(2))
+        }
+
+        db.query("SELECT name, serializedMods FROM ModPreset").use {
+            Assert.assertTrue(it.moveToFirst())
+            Assert.assertEquals("preset", it.getString(0))
+            Assert.assertEquals("[]", it.getString(1))
+        }
+
+        // New tables are usable, and deleting a course must not remove its historical attempts.
+        db.execSQL(
+            "INSERT INTO SkillCourse (id, definitionJson, courseHash, courseName, author, locked, " +
+                "createdAt, updatedAt) VALUES ('course', '{}', 'hash', 'name', 'author', 1, 1, 2)"
+        )
+        db.execSQL(
+            "INSERT INTO SkillCourseAttempt (id, courseId, courseHash, definitionJson, rulesetVersion, " +
+                "outcome, createdAt, resultJson, replayDirectory) VALUES " +
+                "('attempt', 'course', 'hash', '{}', 1, 'completed', 3, '{}', null)"
+        )
+        db.execSQL("DELETE FROM SkillCourse WHERE id = 'course'")
+
+        db.query("SELECT COUNT(*) FROM SkillCourseAttempt WHERE courseId = 'course'").use {
+            Assert.assertTrue(it.moveToFirst())
+            Assert.assertEquals(1, it.getInt(0))
+        }
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun `Test migration from version 6 to 7 preserves courses and attempts`() {
+        helper.createDatabase(testDb, 6).use {
+            it.execSQL(
+                "INSERT INTO SkillCourse (id, definitionJson, courseHash, courseName, author, locked, " +
+                    "createdAt, updatedAt) VALUES ('course', '{\"maps\":[]}', 'hash', 'name', 'author', 1, 1, 2)"
+            )
+            it.execSQL(
+                "INSERT INTO SkillCourseAttempt (id, courseId, courseHash, definitionJson, rulesetVersion, " +
+                    "outcome, createdAt, resultJson, replayDirectory) VALUES " +
+                    "('attempt', 'course', 'hash', '{}', 1, 'completed', 3, '{}', null)"
+            )
+        }
+
+        val db = helper.runMigrationsAndValidate(testDb, 7, true, MIGRATION_6_7)
+
+        db.query("SELECT definitionJson, courseHash, courseName, author, locked FROM SkillCourse").use {
+            Assert.assertTrue(it.moveToFirst())
+            Assert.assertEquals("{\"maps\":[]}", it.getString(0))
+            Assert.assertEquals("hash", it.getString(1))
+            Assert.assertEquals("name", it.getString(2))
+            Assert.assertEquals("author", it.getString(3))
+            Assert.assertEquals(1, it.getInt(4))
+            Assert.assertFalse(it.moveToNext())
+        }
+
+        db.query(
+            "SELECT courseId, courseHash, definitionJson, outcome, resultJson, replayDirectory " +
+                "FROM SkillCourseAttempt"
+        ).use {
+            Assert.assertTrue(it.moveToFirst())
+            Assert.assertEquals("course", it.getString(0))
+            Assert.assertEquals("hash", it.getString(1))
+            Assert.assertEquals("{}", it.getString(2))
+            Assert.assertEquals("completed", it.getString(3))
+            Assert.assertEquals("{}", it.getString(4))
+            Assert.assertTrue(it.isNull(5))
+            Assert.assertFalse(it.moveToNext())
+        }
+
+        // Preferences are independent per course and map and can be inserted after the migration.
+        db.execSQL(
+            "INSERT INTO CoursePlayPreference (courseId, mapHash, speedHundredths, additionalModsJson, updatedAt) " +
+                "VALUES ('course', '00000000000000000000000000000001', 125, '[]', 10)"
+        )
+        db.execSQL(
+            "INSERT INTO CoursePlayPreference (courseId, mapHash, speedHundredths, additionalModsJson, updatedAt) " +
+                "VALUES ('course', '00000000000000000000000000000002', 175, '[]', 11)"
+        )
+        db.execSQL(
+            "INSERT INTO CoursePlayPreference (courseId, mapHash, speedHundredths, additionalModsJson, updatedAt) " +
+                "VALUES ('other', '00000000000000000000000000000001', 225, '[]', 12)"
+        )
+
+        db.query(
+            "SELECT courseId, mapHash, speedHundredths FROM CoursePlayPreference " +
+                "ORDER BY courseId ASC, mapHash ASC"
+        ).use {
+            Assert.assertTrue(it.moveToFirst())
+            Assert.assertEquals("course", it.getString(0))
+            Assert.assertEquals("00000000000000000000000000000001", it.getString(1))
+            Assert.assertEquals(125, it.getInt(2))
+
+            Assert.assertTrue(it.moveToNext())
+            Assert.assertEquals("course", it.getString(0))
+            Assert.assertEquals("00000000000000000000000000000002", it.getString(1))
+            Assert.assertEquals(175, it.getInt(2))
+
+            Assert.assertTrue(it.moveToNext())
+            Assert.assertEquals("other", it.getString(0))
+            Assert.assertEquals("00000000000000000000000000000001", it.getString(1))
+            Assert.assertEquals(225, it.getInt(2))
+            Assert.assertFalse(it.moveToNext())
+        }
+
+        // The composite primary key keeps the same map independent per course and rejects duplicates.
+        try {
+            db.execSQL(
+                "INSERT INTO CoursePlayPreference (courseId, mapHash, speedHundredths, additionalModsJson, updatedAt) " +
+                    "VALUES ('course', '00000000000000000000000000000001', 300, '[]', 13)"
+            )
+            Assert.fail("Duplicate (courseId, mapHash) preference should be rejected")
+        } catch (_: Exception) {
+            // Expected: the composite primary key is enforced.
+        }
+    }
 }

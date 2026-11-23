@@ -1,0 +1,156 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/frg_background"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#80000000"
+    android:clipToOutline="true"
+    android:gravity="center"
+    android:outlineProvider="background">
+
+    <LinearLayout
+        android:id="@+id/frg_body"
+        android:layout_width="680dp"
+        android:layout_height="match_parent"
+        android:layout_margin="12dp"
+        android:background="@drawable/rounded_rect"
+        android:backgroundTint="#13131A"
+        android:clickable="true"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:id="@+id/skill_course_preflight_header"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingLeft="16dp"
+            android:paddingTop="2dp"
+            android:paddingRight="4dp"
+            android:paddingBottom="2dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="@string/skill_course_preflight_title"
+                android:textColor="#FFF"
+                android:textSize="18sp" />
+
+            <Button
+                android:id="@+id/skill_course_preflight_close"
+                style="@style/button_borderless"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:contentDescription="@string/skill_course_close"
+                android:drawableLeft="@drawable/close_24px"
+                android:drawablePadding="0dp"
+                android:gravity="center"
+                android:padding="0dp"
+                app:drawableTint="#FFF" />
+        </LinearLayout>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@drawable/divider" />
+
+        <TextView
+            android:id="@+id/skill_course_preflight_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:paddingLeft="14dp"
+            android:paddingTop="2dp"
+            android:paddingRight="14dp"
+            android:paddingBottom="2dp"
+            android:textColor="#FFB2B2CC"
+            android:textSize="12sp"
+            tools:text="Checking maps and mods…" />
+
+        <ScrollView
+            android:id="@+id/skill_course_preflight_scroll"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:fillViewport="true">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingLeft="14dp"
+                android:paddingRight="14dp"
+                android:paddingBottom="8dp">
+
+                <TextView
+                    android:id="@+id/skill_course_preflight_summary"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="#FFF"
+                    android:textSize="13sp"
+                    tools:text="Example Course · 12 playable maps" />
+
+                <LinearLayout
+                    android:id="@+id/skill_course_preflight_maps"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:orientation="vertical" />
+
+                <TextView
+                    android:id="@+id/skill_course_preflight_error"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/rounded_rect"
+                    android:backgroundTint="#3A3A1E1E"
+                    android:padding="10dp"
+                    android:textColor="#FFFFBFBF"
+                    android:textSize="12sp"
+                    android:visibility="gone"
+                    tools:text="HD cannot be added: incompatible with DA."
+                    tools:visibility="visible" />
+
+            </LinearLayout>
+        </ScrollView>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@drawable/divider" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:divider="@drawable/divider"
+            android:orientation="horizontal"
+            android:showDividers="middle">
+
+            <Button
+                android:id="@+id/skill_course_preflight_cancel"
+                style="@style/button_borderless"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:text="@string/skill_course_cancel" />
+
+            <Button
+                android:id="@+id/skill_course_preflight_start"
+                style="@style/button_borderless"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:text="@string/skill_course_preflight_start"
+                android:textColor="#FFBFBF" />
+        </LinearLayout>
+
+    </LinearLayout>
+
+</LinearLayout>

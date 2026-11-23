@@ -11,6 +11,8 @@ import com.edlplan.ui.BaseAnimationListener
 import com.edlplan.ui.EasingHelper
 import com.osudroid.data.BeatmapOptions
 import com.osudroid.data.DatabaseManager
+import com.osudroid.skillcourse.ui.CourseUi
+import com.osudroid.ui.v2.modmenu.ModMenu
 import com.reco1l.framework.android.cornerRadius
 import com.reco1l.framework.android.dp
 import com.reco1l.osu.ui.MessageDialog
@@ -105,6 +107,16 @@ class BeatmapPropertiesFragment : BaseFragment(), IPropsMenu {
             val dialog = CollectionsManagerFragment()
 
             dialog.showToAddToFolder(selectedBeatmap.setDirectory)
+        }
+
+        findViewById<View>(R.id.manageCourseButton)!!.setOnClickListener {
+            // Capture the exact selected difficulty and a deep copy of the currently enabled mods.
+            // Never fall back to the first difficulty of a set or to the manager's later selection.
+            val selectedBeatmap = GlobalManager.getInstance().selectedBeatmap ?: return@setOnClickListener
+            val mods = ModMenu.enabledMods.deepCopy()
+
+            dismiss()
+            CourseUi.showManager(selectedBeatmap, mods)
         }
 
         findViewById<View>(R.id.deleteBeatmap)!!.setOnClickListener {

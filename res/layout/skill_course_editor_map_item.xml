@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/skill_course_editor_map_root"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginTop="4dp"
+    android:background="@drawable/rounded_rect"
+    android:backgroundTint="#161622"
+    android:orientation="vertical"
+    android:paddingLeft="10dp"
+    android:paddingTop="4dp"
+    android:paddingRight="2dp"
+    android:paddingBottom="4dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/skill_course_editor_map_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="2"
+            android:textColor="#FFF"
+            android:textSize="13sp"
+            tools:text="#1 Example Artist - Example Song [Course Difficulty]" />
+
+        <Button
+            android:id="@+id/skill_course_editor_map_up"
+            style="@style/button_borderless"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:contentDescription="@string/skill_course_editor_move_up"
+            android:gravity="center"
+            android:padding="0dp"
+            android:text="▲"
+            android:textColor="#FFF"
+            android:textSize="14sp" />
+
+        <Button
+            android:id="@+id/skill_course_editor_map_down"
+            style="@style/button_borderless"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:contentDescription="@string/skill_course_editor_move_down"
+            android:gravity="center"
+            android:padding="0dp"
+            android:text="▼"
+            android:textColor="#FFF"
+            android:textSize="14sp" />
+
+        <Button
+            android:id="@+id/skill_course_editor_map_remove"
+            style="@style/button_borderless"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:contentDescription="@string/skill_course_editor_remove_map"
+            android:drawableLeft="@drawable/remove_24px"
+            android:drawablePadding="0dp"
+            android:gravity="center"
+            android:padding="0dp"
+            app:drawableTint="#FFBFBF" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/skill_course_editor_map_meta"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:ellipsize="end"
+        android:maxLines="2"
+        android:paddingRight="8dp"
+        android:textColor="#FFB2B2CC"
+        android:textSize="11sp"
+        tools:text="Mapper · 120 objects" />
+
+    <TextView
+        android:id="@+id/skill_course_editor_map_mods"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:ellipsize="end"
+        android:maxLines="2"
+        android:paddingRight="8dp"
+        android:textColor="#FF8C8CB4"
+        android:textSize="11sp"
+        tools:text="Mods: DA, HD" />
+
+</LinearLayout>

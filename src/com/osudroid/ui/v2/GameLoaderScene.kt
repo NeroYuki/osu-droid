@@ -2,6 +2,7 @@ package com.osudroid.ui.v2
 
 import com.edlplan.framework.easing.*
 import com.osudroid.data.*
+import com.osudroid.skillcourse.runtime.CourseRuntime
 import com.osudroid.multiplayer.*
 import com.osudroid.multiplayer.api.RoomAPI
 import com.osudroid.multiplayer.api.data.PlayerStatus
@@ -25,6 +26,7 @@ import ru.nsu.ccfit.zuev.osu.helper.StringTable
 
 class GameLoaderScene(private val gameScene: GameScene, private val beatmapInfo: BeatmapInfo, mods: ModHashMap, private val isRestart: Boolean) : UIScene() {
 
+    private val loadingRequestId = gameScene.loadingRequestId
     private var lastTimeTouched = System.currentTimeMillis()
     private var isStarting = false
     private var multiplayerLoadElapsed = 0f
@@ -168,6 +170,7 @@ class GameLoaderScene(private val gameScene: GameScene, private val beatmapInfo:
      */
     fun cancel() {
         gameScene.cancelLoading()
+        CourseRuntime.onLoadingCanceled()
 
         if (Multiplayer.isMultiplayer) {
             Multiplayer.session.enterRoom()
@@ -222,7 +225,7 @@ class GameLoaderScene(private val gameScene: GameScene, private val beatmapInfo:
             if (gameScene.isReadyToStart) {
 
                 // Multiplayer will skip the minimum timeout if it's ready to start.
-                if (System.currentTimeMillis() - lastTimeTouched > minimumTimeout || Multiplayer.isMultiplayer) {
+                if (System.currentTimeMillis() - lastTimeTouched > minimumTimeout || Multiplayer.isMultiplayer || CourseRuntime.isRunning()) {
                     isStarting = true
 
                     // This is used instead of getBackgroundBrightness to directly obtain the
@@ -233,6 +236,10 @@ class GameLoaderScene(private val gameScene: GameScene, private val beatmapInfo:
 
                     dimBox.clearModifiers(ModifierType.Alpha)
                     dimBox.fadeTo(1f - backgroundBrightness / 100f, 0.2f).after {
+
+                        // Loading may have been canceled or replaced during this fade.
+                        if (!gameScene.isReadyToStart || gameScene.loadingRequestId != loadingRequestId ||
+                            GlobalManager.getInstance().engine.scene !== this@GameLoaderScene) return@after
 
                         gameScene.hud.apply {
                             alpha = 0f

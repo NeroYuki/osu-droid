@@ -5,7 +5,7 @@ import com.osudroid.utils.isInstanceOfAny
 /**
  * Represents the Double Time mod.
  */
-class ModDoubleTime : ModRateAdjust() {
+class ModDoubleTime : ModRateAdjust(1.5f, 1.5f) {
     override val name = "Double Time"
     override val acronym = "DT"
     override val description = "Zoooooooooom..."
@@ -15,5 +15,4 @@ class ModDoubleTime : ModRateAdjust() {
     override fun isCompatibleWith(other: Mod) =
         !other.isInstanceOfAny(ModNightCore::class, ModHalfTime::class) && super.isCompatibleWith(other)
 
-    override var trackRateMultiplier = 1.5f
 }

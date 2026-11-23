@@ -182,7 +182,8 @@ public class Replay {
                         os.writeLong(stat.getTotalScoreWithMultiplier());
                         os.writeInt(stat.getScoreMaxCombo());
                         os.writeObject(stat.getPlayerName());
-                        os.writeObject(stat.getMod().serializeMods());
+                        os.writeObject(stat.getMod().serializeMods(true,
+                                com.osudroid.skillcourse.runtime.CourseRuntime.isRunning()));
                     }
 
                     os.writeInt(cursorMoves.size());

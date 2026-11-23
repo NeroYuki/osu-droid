@@ -5,9 +5,7 @@ import com.osudroid.utils.isInstanceOfAny
 /**
  * Represents the Half Time mod.
  */
-class ModHalfTime : ModRateAdjust() {
-
-    override var trackRateMultiplier = 0.75f
+class ModHalfTime : ModRateAdjust(0.75f, 0.75f) {
 
     override val name = "Half Time"
     override val acronym = "HT"

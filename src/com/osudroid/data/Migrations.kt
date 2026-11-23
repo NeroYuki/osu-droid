@@ -345,4 +345,90 @@ val MIGRATION_4_5 = object : BackedUpMigration(4, 5) {
     }
 }
 
-val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+/**
+ * Migration from version 5 to 6.
+ *
+ * Adds the Skill Course tables:
+ * - `SkillCourse` stores the authoritative portable definition snapshot, its content hash, summary
+ *   fields and local lock/timestamps. `courseHash` is unique.
+ * - `SkillCourseAttempt` stores an immutable local attempt snapshot and is intentionally not linked
+ *   to `SkillCourse` with a cascading foreign key, so history survives course edits and deletion.
+ */
+val MIGRATION_5_6 = object : BackedUpMigration(5, 6) {
+    override fun performMigration(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `SkillCourse` (" +
+                "`id` TEXT NOT NULL, " +
+                "`definitionJson` TEXT NOT NULL, " +
+                "`courseHash` TEXT NOT NULL, " +
+                "`courseName` TEXT NOT NULL, " +
+                "`author` TEXT NOT NULL, " +
+                "`locked` INTEGER NOT NULL, " +
+                "`createdAt` INTEGER NOT NULL, " +
+                "`updatedAt` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`id`)" +
+            ")"
+        )
+
+        db.execSQL(
+            "CREATE UNIQUE INDEX IF NOT EXISTS `index_SkillCourse_courseHash` " +
+                "ON `SkillCourse` (`courseHash`)"
+        )
+
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `SkillCourseAttempt` (" +
+                "`id` TEXT NOT NULL, " +
+                "`courseId` TEXT NOT NULL, " +
+                "`courseHash` TEXT NOT NULL, " +
+                "`definitionJson` TEXT NOT NULL, " +
+                "`rulesetVersion` INTEGER NOT NULL, " +
+                "`outcome` TEXT NOT NULL, " +
+                "`createdAt` INTEGER NOT NULL, " +
+                "`resultJson` TEXT NOT NULL, " +
+                "`replayDirectory` TEXT, " +
+                "PRIMARY KEY(`id`)" +
+            ")"
+        )
+
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_SkillCourseAttempt_courseId` " +
+                "ON `SkillCourseAttempt` (`courseId`)"
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_SkillCourseAttempt_courseHash` " +
+                "ON `SkillCourseAttempt` (`courseHash`)"
+        )
+    }
+}
+
+/**
+ * Migration from version 6 to 7.
+ *
+ * Adds the `CoursePlayPreference` table, which stores per-map speed and optional-mod choices for a
+ * Skill Course. The table is keyed by course id and map MD5 so reordering maps preserves choices,
+ * and its rows are independent of `SkillCourse` (no foreign key) so deleting a course cannot
+ * rewrite or cascade into other stored data.
+ */
+val MIGRATION_6_7 = object : BackedUpMigration(6, 7) {
+    override fun performMigration(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `CoursePlayPreference` (" +
+                "`courseId` TEXT NOT NULL, " +
+                "`mapHash` TEXT NOT NULL, " +
+                "`speedHundredths` INTEGER NOT NULL DEFAULT 100, " +
+                "`additionalModsJson` TEXT NOT NULL DEFAULT '[]', " +
+                "`updatedAt` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`courseId`, `mapHash`)" +
+            ")"
+        )
+    }
+}
+
+val ALL_MIGRATIONS = arrayOf(
+    MIGRATION_1_2,
+    MIGRATION_2_3,
+    MIGRATION_3_4,
+    MIGRATION_4_5,
+    MIGRATION_5_6,
+    MIGRATION_6_7
+)

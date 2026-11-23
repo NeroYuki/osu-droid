@@ -62,6 +62,7 @@ import ru.nsu.ccfit.zuev.osu.online.OnlineScoring;
 import ru.nsu.ccfit.zuev.osuplus.BuildConfig;
 
 public class ScoringScene {
+    private boolean showingCourse;
     private final Engine engine;
     private final GameScene game;
     private final SongMenu menu;
@@ -90,6 +91,7 @@ public class ScoringScene {
         scene = new UIScene();
         songService = player;
         currentStatistic = stat;
+        showingCourse = false;
         if (replayPath != null && beatmap == null) {
             replayStat = stat;
         }
@@ -625,6 +627,11 @@ public class ScoringScene {
     }
 
     public void back() {
+        if (showingCourse) {
+            showingCourse = false;
+            com.osudroid.skillcourse.runtime.CourseResults.back();
+            return;
+        }
         ResourceManager.getInstance().getSound("applause").stop();
         Multiplayer.finalData = null;
         currentStatistic = null;
@@ -644,11 +651,20 @@ public class ScoringScene {
         replayMusic();
         GlobalManager.getInstance().getEngine().setScene(GlobalManager.getInstance().getSongMenu().getScene());
         GlobalManager.getInstance().getSongMenu().updateScore();
+        com.osudroid.skillcourse.runtime.CourseView.refreshCourseViewIfVisible();
         setReplayID(-1);
     }
 
     public Scene getScene() {
         return scene;
+    }
+
+    /** Rendering a course aggregate deliberately bypasses ordinary score persistence/submission. */
+    public void loadCourse(com.osudroid.skillcourse.runtime.CourseResult result) {
+        showingCourse = true;
+        currentStatistic = null;
+        beatmapInfo = null;
+        scene = com.osudroid.skillcourse.runtime.CourseResults.render(result);
     }
 
     public void stopMusic() {

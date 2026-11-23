@@ -38,9 +38,30 @@ class ModCustomizationMenu : UIModal(
     private val modSettings = mutableMapOf<KClass<out Mod>, ModSettingsSection>()
     private val modSettingsContainer: UILinearContainer = card[0]!!
     private val modSettingComponents = mutableListOf<IModSettingComponent<*>>()
+    private var lockedModClasses: Set<Class<out Mod>> = emptySet()
 
 
     //region Mods
+
+    /**
+     * Removes every mod settings section. Used when a scoped course session restores the ordinary
+     * selector state.
+     */
+    fun clearModSettings() {
+        modSettings.values.toList().forEach { it.detachSelf() }
+        modSettings.clear()
+        modSettingComponents.clear()
+        lockedModClasses = emptySet()
+        hide()
+    }
+
+    /**
+     * Marks mod settings that must not be changed by the user. Required course mods are locked so
+     * their authored configuration cannot be altered by a scoped selector.
+     */
+    fun setLockedModClasses(classes: Set<Class<out Mod>>) {
+        lockedModClasses = classes
+    }
 
     fun onModAdded(mod: Mod) {
         if (mod.settings.isEmpty()) {
@@ -75,11 +96,13 @@ class ModCustomizationMenu : UIModal(
         val isHost = Multiplayer.isRoomHost
 
         modSettingComponents.forEach {
-            it.isEnabled = if (room != null) {
+            val multiplayerAllowed = if (room != null) {
                 it.mod.isValidForMultiplayer && (isHost || (room.gameplaySettings.isFreeMod && it.mod.isValidForMultiplayerAsFreeMod))
             } else {
                 true
             }
+
+            it.isEnabled = multiplayerAllowed && it.mod::class.java !in lockedModClasses
         }
     }
 

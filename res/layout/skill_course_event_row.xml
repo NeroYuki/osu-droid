@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingVertical="2dp">
+
+    <TextView
+        android:id="@+id/skill_course_event_name"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:textColor="#FFF"
+        android:textSize="13sp"
+        tools:text="Slider break" />
+
+    <EditText
+        android:id="@+id/skill_course_event_hp"
+        style="@style/editText"
+        android:layout_width="86dp"
+        android:layout_height="wrap_content"
+        android:layout_marginLeft="4dp"
+        android:gravity="center"
+        android:imeOptions="actionNext|flagNoFullscreen|flagNoExtractUi"
+        android:inputType="numberSigned"
+        android:maxLength="9"
+        android:minHeight="48dp"
+        android:singleLine="true"
+        android:textSize="13sp"
+        tools:text="-1" />
+
+    <EditText
+        android:id="@+id/skill_course_event_ex"
+        style="@style/editText"
+        android:layout_width="86dp"
+        android:layout_height="wrap_content"
+        android:layout_marginLeft="4dp"
+        android:gravity="center"
+        android:imeOptions="actionNext|flagNoFullscreen|flagNoExtractUi"
+        android:inputType="numberSigned"
+        android:maxLength="9"
+        android:minHeight="48dp"
+        android:singleLine="true"
+        android:textSize="13sp"
+        tools:text="2" />
+
+</LinearLayout>

@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/frg_background"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#80000000"
+    android:clipToOutline="true"
+    android:gravity="center"
+    android:outlineProvider="background">
+
+    <LinearLayout
+        android:id="@+id/frg_body"
+        android:layout_width="520dp"
+        android:layout_height="wrap_content"
+        android:layout_margin="16dp"
+        android:background="@drawable/rounded_rect"
+        android:backgroundTint="#1E1E2E"
+        android:orientation="vertical"
+        android:padding="14dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/skill_course_recovery_title"
+            android:textColor="#FFF"
+            android:textSize="17sp" />
+
+        <com.google.android.material.progressindicator.CircularProgressIndicator
+            android:id="@+id/skill_course_recovery_indicator"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginTop="12dp"
+            android:indeterminate="true"
+            app:indicatorColor="#FFF"
+            app:indicatorSize="28dp"
+            app:trackCornerRadius="2dp"
+            app:trackThickness="3dp" />
+
+        <TextView
+            android:id="@+id/skill_course_recovery_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:gravity="center"
+            android:text="@string/skill_course_recovery_preparing"
+            android:textColor="#FFF"
+            android:textSize="13sp"
+            tools:text="Downloading set 2 of 4…" />
+
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="180dp"
+            android:layout_marginTop="8dp">
+
+            <TextView
+                android:id="@+id/skill_course_recovery_details"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="#FFB2B2CC"
+                android:textSize="12sp"
+                android:visibility="gone"
+                tools:text="Some maps are still unresolved."
+                tools:visibility="visible" />
+        </ScrollView>
+
+        <Button
+            android:id="@+id/skill_course_recovery_cancel"
+            style="@style/button_borderless"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:layout_marginTop="8dp"
+            android:gravity="center"
+            android:text="@string/skill_course_recovery_cancel" />
+
+        <Button
+            android:id="@+id/skill_course_recovery_close"
+            style="@style/button_borderless"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:gravity="center"
+            android:text="@string/skill_course_recovery_close"
+            android:visibility="gone"
+            tools:visibility="visible" />
+
+    </LinearLayout>
+
+</LinearLayout>

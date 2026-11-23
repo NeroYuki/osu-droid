@@ -26,6 +26,30 @@ class ModMenuToggle(var mod: Mod): UIButton() {
             }
         }
 
+    /**
+     * Whether this mod is required by the current scoped course session. Locked mods stay selected
+     * but cannot be toggled or configured.
+     */
+    var isLocked = false
+        set(value) {
+            if (field != value) {
+                field = value
+                applyCompatibilityState()
+            }
+        }
+
+    /**
+     * Whether this mod is outside the current scoped course's allowlist (or is a rate mod reserved
+     * for a speedrun speed control). Restricted mods remain visible but are grayed out and disabled.
+     */
+    var isRestricted = false
+        set(value) {
+            if (field != value) {
+                field = value
+                applyCompatibilityState()
+            }
+        }
+
     init {
         orientation = Orientation.Horizontal
         width = FillParent
@@ -82,7 +106,9 @@ class ModMenuToggle(var mod: Mod): UIButton() {
 
     @JvmOverloads
     fun updateVisibility(searchTerm: String = "") {
-        var shouldBeVisible = if (Multiplayer.isMultiplayer && Multiplayer.room != null) {
+        // A scoped course selector must show its disallowed choices so they can be grayed out and
+        // explained. Ordinary multiplayer visibility filtering would hide them entirely.
+        var shouldBeVisible = if (!ModMenu.hasScopedSession() && Multiplayer.isMultiplayer && Multiplayer.room != null) {
             mod.isValidForMultiplayer && (Multiplayer.isRoomHost ||
                     (Multiplayer.room!!.gameplaySettings.isFreeMod && mod.isValidForMultiplayerAsFreeMod))
         } else {
@@ -99,9 +125,26 @@ class ModMenuToggle(var mod: Mod): UIButton() {
     }
 
     fun applyCompatibilityState() {
-        // Intentionally not using isEnabled here, otherwise the button will not be clickable.
+        // Intentionally not using isEnabled alone here, otherwise the button will not be clickable.
         clearModifiers(ModifierType.Alpha)
-        fadeTo(if (hasIncompatibility) 0.5f else 1f, 0.2f)
+
+        val targetAlpha = when {
+            isRestricted -> 0.35f
+            isLocked -> 1f
+            hasIncompatibility -> 0.5f
+            else -> if (isEnabled) 1f else 0.5f
+        }
+        fadeTo(targetAlpha, 0.2f)
+    }
+
+    /**
+     * Applies the course-session restriction flags to this toggle.
+     */
+    fun applyRestriction(locked: Boolean, restricted: Boolean) {
+        isLocked = locked
+        isRestricted = restricted
+        isEnabled = !locked && !restricted
+        applyCompatibilityState()
     }
 
     companion object {

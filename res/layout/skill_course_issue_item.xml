@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginTop="4dp"
+    android:background="@drawable/rounded_rect"
+    android:backgroundTint="#161622"
+    android:orientation="vertical"
+    android:padding="10dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/skill_course_issue_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textColor="#FFF"
+            android:textSize="13sp"
+            tools:text="#3 Map is missing" />
+
+        <Button
+            android:id="@+id/skill_course_issue_copy"
+            style="@style/button_borderless"
+            android:layout_width="wrap_content"
+            android:layout_height="48dp"
+            android:contentDescription="@string/skill_course_copy"
+            android:gravity="center"
+            android:paddingHorizontal="10dp"
+            android:text="@string/skill_course_copy"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/skill_course_issue_detail"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:ellipsize="end"
+        android:maxLines="3"
+        android:textColor="#FFB2B2CC"
+        android:textSize="12sp"
+        tools:text="Example Artist - Example Song [Course Difficulty] by Mapper" />
+
+    <TextView
+        android:id="@+id/skill_course_issue_md5"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:fontFamily="monospace"
+        android:textColor="#FF8C8CB4"
+        android:textSize="11sp"
+        tools:text="Required MD5: 00000000000000000000000000000001" />
+
+    <TextView
+        android:id="@+id/skill_course_issue_reason"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="#FFF1B2B2"
+        android:textSize="12sp"
+        android:visibility="gone"
+        tools:text="The installed revision does not match the authored hash."
+        tools:visibility="visible" />
+
+</LinearLayout>

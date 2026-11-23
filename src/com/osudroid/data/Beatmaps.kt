@@ -507,6 +507,29 @@ fun BeatmapInfo(data: Beatmap, lastModified: Long, calculateDifficulty: Boolean,
     @Update(onConflict = OnConflictStrategy.REPLACE)
     fun update(beatmapInfo: BeatmapInfo)
 
+    @Query("SELECT * FROM BeatmapInfo")
+    fun getAll(): List<BeatmapInfo>
+
+    @Query("SELECT * FROM BeatmapInfo WHERE setDirectory = :setDirectory")
+    fun getBeatmapsInSet(setDirectory: String): List<BeatmapInfo>
+
+    @Query("DELETE FROM BeatmapInfo WHERE filename = :filename AND setDirectory = :setDirectory")
+    fun deleteByKey(filename: String, setDirectory: String)
+
+    /**
+     * Applies a targeted import reconciliation in one transaction. Only the declared keys are
+     * touched; sibling difficulties and all options/collections/history rows are preserved.
+     */
+    @Transaction
+    fun applyImportChanges(upserts: List<BeatmapInfo>, deleteKeys: List<BeatmapKey>) {
+        for (key in deleteKeys) {
+            deleteByKey(key.filename, key.setDirectory)
+        }
+        if (upserts.isNotEmpty()) {
+            insertAll(upserts)
+        }
+    }
+
     @Query("UPDATE BeatmapInfo SET droidStarRating = null")
     fun resetDroidStarRatings()
 
@@ -532,5 +555,13 @@ fun BeatmapInfo(data: Beatmap, lastModified: Long, calculateDifficulty: Boolean,
     @Query("DELETE FROM BeatmapInfo")
     fun deleteAll()
 }
+
+/**
+ * Identifies one primary key of [BeatmapInfo] without constructing a full row.
+ */
+data class BeatmapKey(
+    val filename: String,
+    val setDirectory: String,
+)
 
 

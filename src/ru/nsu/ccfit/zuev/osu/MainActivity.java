@@ -442,6 +442,7 @@ public class MainActivity extends BaseGameActivity implements
     }
 
     public void loadBeatmapLibrary() {
+        com.osudroid.beatmaplisting.BeatmapArchiveImporter.recoverPendingImports();
         GlobalManager.getInstance().setInfo("Checking for new maps...");
         if (contentUriToAdd != null) {
             fileToAdd = copyContentUriToCache(contentUriToAdd);
@@ -451,14 +452,15 @@ public class MainActivity extends BaseGameActivity implements
         final HashSet<String> forceImportedBeatmaps = new HashSet<>();
         if (fileToAdd != null) {
             File file = new File(fileToAdd);
-            if (file.getName().toLowerCase().endsWith(".osz")) {
+            if (file.getName().toLowerCase().endsWith(".odc") || file.getName().toLowerCase().endsWith(".json")) {
+                com.osudroid.skillcourse.ui.CourseFiles.importFile(this, file);
+                fileToAdd = null;
+            } else if (file.getName().toLowerCase().endsWith(".osz")) {
                 ToastLogger.showText(
                         StringTable.get(R.string.library_importing),
                         false);
 
-                FileUtils.extractBeatmapset(fileToAdd, Config.getBeatmapPath());
-                forceImportedBeatmaps.add(file.getName().substring(0, file.getName().length() - 4)
-                        .replaceAll("(?i) \\[no video]$", ""));
+                importCourseBeatmapArchive(file, forceImportedBeatmaps);
                 // LibraryManager.INSTANCE.sort();
                 fileToAdd = null;
             } else if (file.getName().toLowerCase().endsWith(".osk")) {
@@ -522,7 +524,7 @@ public class MainActivity extends BaseGameActivity implements
                         R.string.library_importing_several,
                         beatmaps.size()), false);
                 for (final String beatmap : beatmaps) {
-                    FileUtils.extractBeatmapset(beatmap, Config.getBeatmapPath());
+                    importCourseBeatmapArchive(new File(beatmap), forceImportedBeatmaps);
                 }
                 // Config.setDELETE_OSZ(deleteOsz);
 
@@ -532,6 +534,23 @@ public class MainActivity extends BaseGameActivity implements
 
         LibraryManager.scanDirectory(forceImportedBeatmaps);
         LibraryManager.loadLibrary();
+        com.osudroid.skillcourse.recovery.CourseLibraryEvents.importCompleted(forceImportedBeatmaps);
+    }
+
+    /** Invoked only after an active course has released its frozen map files. */
+    public void importDeferredCourseFile(File file) {
+        fileToAdd = file.getAbsolutePath();
+        loadBeatmapLibrary();
+        Execution.updateThread(() -> GlobalManager.getInstance().getSongMenu().reload());
+    }
+
+    private void importCourseBeatmapArchive(File archive, java.util.Collection<String> affectedDirectories) {
+        var result = com.osudroid.beatmaplisting.BeatmapArchiveImporter.importArchive(archive);
+        if (result.success) {
+            affectedDirectories.addAll(result.affectedDirectories);
+        } else {
+            ToastLogger.showText("Beatmap import failed: " + String.join("; ", result.errors), true);
+        }
     }
 
     public void checkNewSkins() {
@@ -682,7 +701,9 @@ public class MainActivity extends BaseGameActivity implements
 
             String ext;
 
-            if ("application/x-osu-beatmap-archive".equals(mimeType)) {
+            if ("application/vnd.osudroid.course+json".equals(mimeType) || "application/json".equals(mimeType)) {
+                ext = ".odc";
+            } else if ("application/x-osu-beatmap-archive".equals(mimeType)) {
                 ext = ".osz";
             } else if ("application/x-osu-skin-archive".equals(mimeType)) {
                 ext = ".osk";
@@ -725,6 +746,16 @@ public class MainActivity extends BaseGameActivity implements
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        if (com.osudroid.skillcourse.runtime.CourseClient.deferIncoming(this, intent)) {
+            return;
+        }
+        if (com.osudroid.skillcourse.runtime.CourseRuntime.isBusy()) {
+            ToastLogger.showText("Finish or leave the course before opening this link.", true);
+            return;
+        }
+        if (startupFinished && com.osudroid.skillcourse.ui.CourseFiles.consumeIncoming(this, intent)) {
+            return;
+        }
 
         // Determined before parsing, as parsing consumes the intent.
         boolean isBeatmapLink = isBeatmapLinkIntent(intent);
@@ -778,6 +809,12 @@ public class MainActivity extends BaseGameActivity implements
     }
 
     @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        com.osudroid.skillcourse.ui.CourseFiles.onActivityResult(this, requestCode, resultCode, data);
+    }
+
+    @Override
     public void onResume() {
         super.onResume();
         activityVisible = true;
@@ -823,7 +860,10 @@ public class MainActivity extends BaseGameActivity implements
 
         var gameScene = GlobalManager.getInstance().getGameScene();
 
-        if (gameScene != null && mEngine.getScene() == gameScene.getScene()) {
+        if (com.osudroid.skillcourse.runtime.CourseRuntime.isBusy()) {
+            com.osudroid.skillcourse.runtime.CourseRuntime.onPause();
+            Execution.updateThread(com.osudroid.skillcourse.runtime.CourseRuntime::onFocusLost);
+        } else if (gameScene != null && mEngine.getScene() == gameScene.getScene()) {
             if (Multiplayer.isMultiplayer) {
                 ToastLogger.showText("You've left the match.", true);
 
@@ -880,7 +920,10 @@ public class MainActivity extends BaseGameActivity implements
         if (getEngine() != null && !hasFocus) {
             var gameScene = GlobalManager.getInstance().getGameScene();
 
-            if (gameScene != null && getEngine().getScene() == gameScene.getScene() && !gameScene.isPaused() && !Multiplayer.isMultiplayer) {
+            if (com.osudroid.skillcourse.runtime.CourseRuntime.isBusy()) {
+                com.osudroid.skillcourse.runtime.CourseRuntime.onPause();
+                Execution.updateThread(com.osudroid.skillcourse.runtime.CourseRuntime::onFocusLost);
+            } else if (gameScene != null && getEngine().getScene() == gameScene.getScene() && !gameScene.isPaused() && !Multiplayer.isMultiplayer) {
                 Execution.updateThread(gameScene::pause);
             }
 
@@ -973,6 +1016,11 @@ public class MainActivity extends BaseGameActivity implements
         }
 
         Scene currentScene = GlobalManager.getInstance().getEngine().getScene();
+
+        if (keyCode == KeyEvent.KEYCODE_BACK && com.osudroid.skillcourse.runtime.CourseRuntime.isPreflighting()) {
+            com.osudroid.skillcourse.runtime.CourseRuntime.cancelPreflight();
+            return true;
+        }
 
         if (event.getAction() == TouchEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_BACK && ActivityOverlay.onBackPress()) {
             return true;

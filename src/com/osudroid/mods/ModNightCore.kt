@@ -5,9 +5,7 @@ import com.osudroid.utils.isInstanceOfAny
 /**
  * Represents the Night Core mod.
  */
-open class ModNightCore : ModRateAdjust() {
-
-    override var trackRateMultiplier = 1.5f
+open class ModNightCore : ModRateAdjust(1.5f, 1.5f) {
 
     override val name = "Nightcore"
     override val acronym = "NC"
