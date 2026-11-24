@@ -675,6 +675,10 @@ public class StatisticV2 implements Serializable {
                 put("good", hit100);
                 put("bad", hit50);
                 put("miss", misses);
+                put("sliderHeadHit", sliderHeadHits);
+                put("sliderTickHit", sliderTickHits);
+                put("sliderRepeatHit", sliderRepeatHits);
+                put("sliderEndHit", sliderEndHits);
                 put("isAlive", isAlive);
             } catch (Exception e) {
                 Multiplayer.log(e);

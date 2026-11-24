@@ -39,5 +39,9 @@ fun jsonToStatistic(json: JSONObject) = StatisticV2().apply {
     hit100 = json.optInt("good")
     hit50 = json.optInt("bad")
     misses = json.optInt("miss")
+    sliderHeadHits = json.optInt("sliderHeadHit")
+    sliderTickHits = json.optInt("sliderTickHit")
+    sliderRepeatHits = json.optInt("sliderRepeatHit")
+    sliderEndHits = json.optInt("sliderEndHit")
     isAlive = json.getBoolean("isAlive")
 }

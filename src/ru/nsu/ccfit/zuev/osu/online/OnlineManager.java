@@ -45,7 +45,7 @@ public class OnlineManager {
      */
     public static final String attestationChallengeEndpoint = endpoint + "getAttestationChallenge";
 
-    private static final String onlineVersion = "50";
+    private static final String onlineVersion = "51";
     public static final String defaultAvatarURL = getAvatarURL(0);
     public static final String profileBannerEndpoint = "https://" + hostname + "/user/banner/";
 
