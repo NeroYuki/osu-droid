@@ -105,18 +105,12 @@ class SpectatorDataManager(
                         writeByte(data.result.toInt())
                     }
 
-                    writeInt(endEventIndex - beginningEventIndex)
-                    for (i in beginningEventIndex until endEventIndex) {
-                        val event = events[i]
-
-                        writeFloat(event.time)
-                        writeLong(event.score)
-                        writeInt(event.combo)
-                        writeInt(event.hit300)
-                        writeInt(event.hit100)
-                        writeInt(event.hit50)
-                        writeInt(event.misses)
-                    }
+                    SpectatorEvent.writeEventData(
+                        this,
+                        events,
+                        beginningEventIndex,
+                        endEventIndex
+                    )
 
                     flush()
                     byteArrayOutputStream.flush()
@@ -224,7 +218,11 @@ class SpectatorDataManager(
             stat.hit300,
             stat.hit100,
             stat.hit50,
-            stat.misses
+            stat.misses,
+            stat.sliderHeadHits,
+            stat.sliderTickHits,
+            stat.sliderRepeatHits,
+            stat.sliderEndHits
         ))
 
     /**
