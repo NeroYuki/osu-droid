@@ -462,7 +462,7 @@ public class Replay {
                     var nestedObject = slider.getNestedHitObjects().get(j);
 
                     if (nestedObject instanceof SliderTick) {
-                        stat.addSliderHeadHit();
+                        stat.addSliderTickHit();
                     } else if (nestedObject instanceof SliderRepeat) {
                         stat.addSliderRepeatHit();
                     } else {

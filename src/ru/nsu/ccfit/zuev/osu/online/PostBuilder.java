@@ -2,6 +2,7 @@ package ru.nsu.ccfit.zuev.osu.online;
 
 import ru.nsu.ccfit.zuev.osu.SecurityUtils;
 
+import okhttp3.OkHttpClient;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 import okhttp3.Request;
@@ -9,15 +10,18 @@ import okhttp3.Request;
 import org.anddev.andengine.util.Debug;
 
 import java.io.BufferedReader;
+import java.io.IOException;
 import java.io.Serial;
 import java.io.StringReader;
 import java.io.UnsupportedEncodingException;
+import java.net.ConnectException;
 import java.net.UnknownHostException;
 import java.net.URLEncoder;
 import java.util.ArrayList;
 
 public abstract class PostBuilder {
     private final StringBuilder values = new StringBuilder();
+    private boolean signatureAdded;
 
     public void addParam(final String key, final String value) {
         try {
@@ -32,14 +36,9 @@ public abstract class PostBuilder {
 
     public ArrayList<String> requestWithAttempts(final String scriptUrl, int attempts) throws RequestException {
         ArrayList<String> response = null;
-        String signature = SecurityUtils.signRequest(values.toString());
-
-        if (signature != null) {
-            addParam("sign", signature);
-        }
         for (int i = 0; i < attempts; i++) {
             try {
-                response = request(scriptUrl);
+                response = request(OnlineManager.client, scriptUrl);
             } catch (RequestException e) {
                 if (e.getCause() instanceof UnknownHostException) {
                     Debug.e("Cannot resolve server name");
@@ -68,15 +67,32 @@ public abstract class PostBuilder {
         return response;
     }
 
-    private ArrayList<String> request(final String scriptUrl) throws RequestException {
+    /**
+     * Sends a request once.
+     *
+     * @param client The client to send the request with.
+     * @param scriptUrl The URL to send the request to.
+     * @return The lines of the response body, or an empty line if the response was not successful.
+     * @throws RequestException If the request could not be completed, such as when the connection fails or times out.
+     */
+    public ArrayList<String> request(final OkHttpClient client, final String scriptUrl) throws RequestException {
         ArrayList<String> response = new ArrayList<>();
+
+        // Both one-shot submissions and requests with attempts use the tournament signature.
+        if (!signatureAdded) {
+            String signature = SecurityUtils.signRequest(values.toString());
+            if (signature != null) {
+                addParam("sign", signature);
+                signatureAdded = true;
+            }
+        }
 
         Request request = new Request.Builder()
             .url(scriptUrl)
             .post(getRequestBody())
             .build();
 
-        try (Response resp = OnlineManager.client.newCall(request).execute()) {
+        try (Response resp = client.newCall(request).execute()) {
 
             if (resp.isSuccessful() && resp.body() != null) {
                 Debug.i("request url=" + scriptUrl);
@@ -90,7 +106,9 @@ public abstract class PostBuilder {
                 Debug.i("request url=" + scriptUrl);
                 Debug.i("request -----End of content-----");
             }
-        } catch(Exception e) {
+        } catch (IOException e) {
+            throw new RequestException(e);
+        } catch (Exception e) {
             Debug.e(e.getMessage(), e);
         }
 
@@ -110,6 +128,13 @@ public abstract class PostBuilder {
 
         public RequestException(final Throwable cause) {
             super(cause);
+        }
+
+        /**
+         * Whether the request failed before it could be sent, so sending it again cannot repeat it.
+         */
+        public boolean wasNotSent() {
+            return getCause() instanceof UnknownHostException || getCause() instanceof ConnectException;
         }
     }
 }
