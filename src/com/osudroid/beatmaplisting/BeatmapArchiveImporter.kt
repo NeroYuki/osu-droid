@@ -3,6 +3,7 @@ package com.osudroid.beatmaplisting
 import android.util.Log
 import com.osudroid.beatmaps.BeatmapCache
 import com.osudroid.beatmaps.parser.BeatmapParser
+import com.osudroid.beatmaps.parser.UnsupportedBeatmapModeException
 import com.osudroid.data.BeatmapInfo
 import com.osudroid.data.BeatmapKey
 import com.osudroid.data.DatabaseManager
@@ -80,6 +81,34 @@ data class BeatmapImportResult(
     @JvmField val errors: List<String>,
     @JvmField val failure: BeatmapImportFailure,
 ) {
+    /**
+     * A short, single-line summary of the first diagnostic suitable for a toast.
+     *
+     * The full [errors] list is intentionally left untouched for logging and diagnostics.
+     */
+    val errorSummary: String
+        get() {
+            val first = errors.asSequence()
+                .map { it.trim() }
+                .firstOrNull { it.isNotEmpty() }
+                ?: ERROR_SUMMARY_FALLBACK
+            val singleLine = first.replace(WHITESPACE, " ").trim()
+            if (singleLine.isEmpty()) {
+                return ERROR_SUMMARY_FALLBACK
+            }
+            return if (singleLine.length <= MAX_ERROR_SUMMARY_LENGTH) {
+                singleLine
+            } else {
+                singleLine.take(MAX_ERROR_SUMMARY_LENGTH - 1).trimEnd() + "\u2026"
+            }
+        }
+
+    companion object {
+        private val WHITESPACE = Regex("\\s+")
+        private const val MAX_ERROR_SUMMARY_LENGTH = 180
+        private const val ERROR_SUMMARY_FALLBACK = "Beatmap import failed."
+    }
+
     fun expectedMatched(mapHash: String): Boolean =
         expectedMaps.any { it.mapHash.equals(mapHash, ignoreCase = true) && it.matched }
 }
@@ -123,8 +152,42 @@ object BeatmapArchiveImporter {
         return lease.use {
             importLock.withLock {
                 recoverPendingImportsLocked()
-                importArchiveLocked(archive, expectedMaps)
+                val result = importArchiveLocked(archive, expectedMaps)
+                deleteSuccessfulSourceIfRequested(archive, result)
+                result
             }
+        }
+    }
+
+    /**
+     * Removes the source `.osz` only after a fully completed import and only when the user asked for
+     * downloaded archives to be deleted. Failures, partial course repairs, rollbacks and recovery
+     * states always keep the source so the import can be retried.
+     */
+    private fun deleteSuccessfulSourceIfRequested(archive: File, result: BeatmapImportResult) {
+        if (!result.success || result.failure != BeatmapImportFailure.NONE) {
+            return
+        }
+        if (!Config.isDELETE_OSZ()) {
+            return
+        }
+        if (!archive.name.endsWith(".osz", ignoreCase = true)) {
+            return
+        }
+
+        try {
+            if (archive.exists() && !archive.delete()) {
+                Log.w(
+                    "BeatmapArchiveImporter",
+                    "Unable to delete imported source archive: ${archive.path}",
+                )
+            }
+        } catch (e: Exception) {
+            Log.w(
+                "BeatmapArchiveImporter",
+                "Unable to delete imported source archive: ${archive.path}",
+                e,
+            )
         }
     }
 
@@ -517,6 +580,7 @@ object BeatmapArchiveImporter {
         val maps = ArrayList<StagedMap>()
         val assets = ArrayList<StagedAsset>()
         val parseErrors = ArrayList<String>()
+        var unsupportedModeCount = 0
 
         for (file in files) {
             val relative = file.relativeTo(contentRoot).path.replace(File.separatorChar, '/')
@@ -541,6 +605,11 @@ object BeatmapArchiveImporter {
                         audioFilename = beatmap.general.audioFilename,
                         backgroundFilename = beatmap.events.backgroundFilename,
                     )
+                } catch (_: UnsupportedBeatmapModeException) {
+                    // Non-standard modes are not importable, but a mixed-mode archive is still a
+                    // valid osu!standard import. Skip the file quietly instead of reporting it as
+                    // corrupt or adding it to the installed assets.
+                    unsupportedModeCount++
                 } catch (e: Exception) {
                     parseErrors += "Skipped unreadable osu file ${file.name}: " +
                         (e.message ?: e.javaClass.simpleName)
@@ -551,10 +620,17 @@ object BeatmapArchiveImporter {
         }
 
         if (maps.isEmpty()) {
-            throw ImportValidationException(
-                "Archive contains no parseable osu!standard difficulties." +
-                    if (parseErrors.isEmpty()) "" else " " + parseErrors.joinToString(" ")
-            )
+            val reason = when {
+                parseErrors.isNotEmpty() ->
+                    "Archive contains no parseable osu!standard difficulties. " +
+                        parseErrors.joinToString(" ")
+
+                unsupportedModeCount > 0 ->
+                    "Archive contains no supported osu!standard difficulties."
+
+                else -> "Archive contains no parseable osu!standard difficulties."
+            }
+            throw ImportValidationException(reason)
         }
 
         return ArchiveLayout(

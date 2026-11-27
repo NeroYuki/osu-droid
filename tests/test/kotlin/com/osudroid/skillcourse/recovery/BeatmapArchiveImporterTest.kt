@@ -5,6 +5,7 @@ import androidx.room.Room
 import com.osudroid.beatmaplisting.BeatmapArchiveImporter
 import com.osudroid.beatmaplisting.BeatmapArchiveImporterHooks
 import com.osudroid.beatmaplisting.BeatmapImportFailure
+import com.osudroid.beatmaplisting.BeatmapImportResult
 import com.osudroid.beatmaplisting.ImportCommitPoint
 import com.osudroid.beatmaplisting.SimulatedProcessDeath
 import com.osudroid.beatmaps.parser.BeatmapParser
@@ -41,6 +42,7 @@ class BeatmapArchiveImporterTest {
     private lateinit var beatmapPath: File
     private var previousBeatmapPath: String? = null
     private var previousCorePath: String? = null
+    private var previousDeleteOsz: Boolean = false
 
     private val reloadedDirectories = ArrayList<Collection<String>>()
 
@@ -48,6 +50,8 @@ class BeatmapArchiveImporterTest {
     fun setUp() {
         previousBeatmapPath = Config.getBeatmapPath()
         previousCorePath = Config.getCorePath()
+        previousDeleteOsz = Config.isDELETE_OSZ()
+        Config.setDELETE_OSZ(false)
 
         beatmapPath = File(temp.root, "Songs").apply { mkdirs() }
         Config.setBeatmapPath(beatmapPath.absolutePath + File.separator)
@@ -71,6 +75,7 @@ class BeatmapArchiveImporterTest {
     fun tearDown() {
         BeatmapArchiveImporterHooks.resetForTesting()
         database.close()
+        Config.setDELETE_OSZ(previousDeleteOsz)
         previousBeatmapPath?.let { Config.setBeatmapPath(it) }
         previousCorePath?.let { Config.setCorePath(it) }
     }
@@ -167,6 +172,7 @@ class BeatmapArchiveImporterTest {
 
     @Test
     fun `Wrong revision leaves the installed candidate untouched`() {
+        Config.setDELETE_OSZ(true)
         val oldBytes = osuBytes(title = "Song", circleCount = 1)
         val wrongBytes = osuBytes(title = "Song", circleCount = 7)
         val requiredMd5 = md5(osuBytes(title = "Song", circleCount = 9))
@@ -174,14 +180,16 @@ class BeatmapArchiveImporterTest {
         installSet("Set A", "map.osu", oldBytes, 1, 0, 1)
         val oldFile = File(beatmapPath, "Set A/map.osu")
         val before = oldFile.readBytes()
+        val source = archive(mapOf("Set A/map.osu" to wrongBytes))
 
         val result = BeatmapArchiveImporter.importArchive(
-            archive(mapOf("Set A/map.osu" to wrongBytes)),
+            source,
             listOf(expectedMap(requiredMd5, circle = 9, slider = 0, spinner = 1)),
         )
 
         assertFalse(result.success)
         assertEquals(BeatmapImportFailure.EXPECTED_REVISION_UNAVAILABLE, result.failure)
+        assertTrue(source.isFile)
         assertTrue(oldFile.readBytes().contentEquals(before))
         assertEquals(md5(oldBytes), database.getBeatmapInfoTable().getBeatmapsInSet("Set A").single().md5)
         assertTrue(reloadedDirectories.isEmpty())
@@ -189,10 +197,11 @@ class BeatmapArchiveImporterTest {
 
     @Test
     fun `Invalid archive is rejected without touching an existing install`() {
+        Config.setDELETE_OSZ(true)
         val oldBytes = osuBytes(title = "Song", circleCount = 1)
         installSet("Set A", "map.osu", oldBytes, 1, 0, 1)
 
-        val badArchive = File(temp.root, "bad.zip").apply { writeText("not a zip") }
+        val badArchive = File(temp.root, "bad.osz").apply { writeText("not a zip") }
         val before = File(beatmapPath, "Set A/map.osu").readBytes()
 
         val result = BeatmapArchiveImporter.importArchive(
@@ -202,6 +211,7 @@ class BeatmapArchiveImporterTest {
 
         assertFalse(result.success)
         assertEquals(BeatmapImportFailure.INVALID_ARCHIVE, result.failure)
+        assertTrue(badArchive.isFile)
         assertTrue(File(beatmapPath, "Set A/map.osu").readBytes().contentEquals(before))
     }
 
@@ -243,11 +253,14 @@ class BeatmapArchiveImporterTest {
     }
 
     @Test
-    fun `Database failure rolls files back and does not publish success`() {        val oldBytes = osuBytes(title = "Song", circleCount = 1)
+    fun `Database failure rolls files back and does not publish success`() {
+        Config.setDELETE_OSZ(true)
+        val oldBytes = osuBytes(title = "Song", circleCount = 1)
         val newBytes = osuBytes(title = "Song", circleCount = 2)
         installSet("Set A", "map.osu", oldBytes, 1, 0, 1)
         val oldFile = File(beatmapPath, "Set A/map.osu")
         val before = oldFile.readBytes()
+        val source = archive(mapOf("Set A/map.osu" to newBytes))
 
         BeatmapArchiveImporterHooks.fault = { point ->
             if (point == ImportCommitPoint.BEFORE_DATABASE) {
@@ -256,11 +269,12 @@ class BeatmapArchiveImporterTest {
         }
 
         val result = BeatmapArchiveImporter.importArchive(
-            archive(mapOf("Set A/map.osu" to newBytes)),
+            source,
             listOf(expectedMap(md5(newBytes), circle = 2, slider = 0, spinner = 1)),
         )
 
         assertFalse(result.success)
+        assertTrue(source.isFile)
         assertTrue(oldFile.readBytes().contentEquals(before))
         assertEquals(md5(oldBytes), database.getBeatmapInfoTable().getBeatmapsInSet("Set A").single().md5)
         assertTrue(reloadedDirectories.isEmpty())
@@ -518,6 +532,163 @@ class BeatmapArchiveImporterTest {
         assertFalse(File(temp.root, "escape.txt").exists())
     }
 
+    @Test
+    fun `Successful ordinary import deletes the source archive when configured`() {
+        Config.setDELETE_OSZ(true)
+        val bytes = osuBytes(title = "Song", circleCount = 2)
+        val source = archive(mapOf("Set A/map.osu" to bytes))
+
+        val result = BeatmapArchiveImporter.importArchive(source)
+
+        assertTrue(result.errors.joinToString("\n"), result.success)
+        assertEquals(BeatmapImportFailure.NONE, result.failure)
+        assertFalse(source.exists())
+        assertTrue(File(beatmapPath, "Set A/map.osu").isFile)
+        assertEquals(
+            listOf("map.osu"),
+            database.getBeatmapInfoTable().getBeatmapsInSet("Set A").map { it.filename },
+        )
+    }
+
+    @Test
+    fun `Successful ordinary import retains the source archive when deletion is disabled`() {
+        Config.setDELETE_OSZ(false)
+        val source = archive(mapOf("Set A/map.osu" to osuBytes(title = "Song", circleCount = 2)))
+
+        val result = BeatmapArchiveImporter.importArchive(source)
+
+        assertTrue(result.errors.joinToString("\n"), result.success)
+        assertTrue(source.isFile)
+        assertTrue(File(beatmapPath, "Set A/map.osu").isFile)
+    }
+
+    @Test
+    fun `Mixed mode archive imports only standard difficulties`() {
+        Config.setDELETE_OSZ(true)
+        val standardBytes = osuBytes(title = "Song", circleCount = 2)
+        val source = archive(
+            mapOf(
+                "Set A/standard.osu" to standardBytes,
+                "Set A/taiko.osu" to osuBytes(title = "Song", version = "Taiko", circleCount = 1, mode = 1),
+                "Set A/catch.osu" to osuBytes(title = "Song", version = "Catch", circleCount = 1, mode = 2),
+                "Set A/mania.osu" to osuBytes(title = "Song", version = "Mania", circleCount = 1, mode = 3),
+            )
+        )
+
+        val result = BeatmapArchiveImporter.importArchive(source)
+
+        assertTrue(result.errors.joinToString("\n"), result.success)
+        assertEquals(BeatmapImportFailure.NONE, result.failure)
+        assertTrue(result.errors.isEmpty())
+        assertFalse(source.exists())
+
+        val installedDifficulties = File(beatmapPath, "Set A").walkTopDown()
+            .filter { it.isFile && it.name.endsWith(".osu", ignoreCase = true) }
+            .map { it.name }
+            .toSet()
+        assertEquals(setOf("standard.osu"), installedDifficulties)
+        assertEquals(
+            listOf("standard.osu"),
+            database.getBeatmapInfoTable().getBeatmapsInSet("Set A").map { it.filename },
+        )
+        assertEquals(md5(standardBytes), database.getBeatmapInfoTable()
+            .getBeatmapsInSet("Set A").single().md5)
+    }
+
+    @Test
+    fun `Unsupported-only archive fails concisely and retains its source`() {
+        Config.setDELETE_OSZ(true)
+        val source = archive(
+            mapOf(
+                "Set A/taiko.osu" to osuBytes(title = "Song", version = "Taiko", circleCount = 1, mode = 1),
+                "Set A/mania.osu" to osuBytes(title = "Song", version = "Mania", circleCount = 1, mode = 3),
+            )
+        )
+
+        val result = BeatmapArchiveImporter.importArchive(source)
+
+        assertFalse(result.success)
+        assertEquals(BeatmapImportFailure.INVALID_ARCHIVE, result.failure)
+        assertEquals(1, result.errors.size)
+        assertTrue(
+            result.errors.single(),
+            result.errors.single().contains("no supported osu!standard difficulties", ignoreCase = true),
+        )
+        assertTrue(result.errors.single().length <= 180)
+        assertTrue(source.isFile)
+        assertTrue(database.getBeatmapInfoTable().getAll().isEmpty())
+        assertFalse(File(beatmapPath, "Set A").exists())
+    }
+
+    @Test
+    fun `Bounded error summary keeps diagnostics intact`() {
+        val diagnostics = (1..5).map { "diagnostic $it: " + "x".repeat(200) }
+        val base = BeatmapImportResult(
+            success = false,
+            archiveName = "long.osz",
+            affectedDirectories = emptyList(),
+            importedBeatmaps = emptyList(),
+            identities = emptyList(),
+            expectedMaps = emptyList(),
+            errors = emptyList(),
+            failure = BeatmapImportFailure.INVALID_ARCHIVE,
+        )
+        val result = base.copy(errors = diagnostics)
+
+        val summary = result.errorSummary
+
+        assertEquals(diagnostics, result.errors)
+        assertEquals(180, summary.length)
+        assertFalse(summary.contains('\n'))
+        assertTrue(summary.startsWith("diagnostic 1:"))
+        assertTrue(summary.endsWith("\u2026"))
+        assertEquals(
+            "first line second line",
+            base.copy(errors = listOf("first line\nsecond line")).errorSummary,
+        )
+        assertEquals("Beatmap import failed.", base.errorSummary)
+    }
+
+    @Test
+    fun `Malformed difficulty remains an error and preserves the source archive`() {
+        Config.setDELETE_OSZ(true)
+        val source = archive(
+            mapOf(
+                "Set A/standard.osu" to osuBytes(title = "Song", circleCount = 2),
+                "Set A/broken.osu" to "invalid osu file format".toByteArray(),
+            )
+        )
+
+        val result = BeatmapArchiveImporter.importArchive(source)
+
+        assertFalse(result.success)
+        assertTrue(result.errors.any { it.contains("broken.osu") })
+        assertTrue(source.isFile)
+    }
+
+    @Test
+    fun `Partial course repair retains its archive even after installing available revisions`() {
+        Config.setDELETE_OSZ(true)
+        val available = osuBytes(title = "Song", circleCount = 2)
+        val missing = osuBytes(title = "Song", circleCount = 3)
+        val source = archive(mapOf("Set A/map.osu" to available))
+
+        val result = BeatmapArchiveImporter.importArchive(
+            source,
+            listOf(
+                expectedMap(md5(available), circle = 2, slider = 0, spinner = 1),
+                expectedMap(md5(missing), circle = 3, slider = 0, spinner = 1),
+            ),
+        )
+
+        assertFalse(result.success)
+        assertEquals(BeatmapImportFailure.EXPECTED_REVISION_UNAVAILABLE, result.failure)
+        assertTrue(result.expectedMatched(md5(available)))
+        assertFalse(result.expectedMatched(md5(missing)))
+        assertTrue(File(beatmapPath, "Set A/map.osu").isFile)
+        assertTrue(source.isFile)
+    }
+
     private fun installSet(
         directory: String,
         filename: String,
@@ -560,6 +731,7 @@ class BeatmapArchiveImporterTest {
         version: String = "Test Diff",
         circleCount: Int,
         sliderCount: Int = 0,
+        mode: Int = 0,
     ): ByteArray {
         val hits = buildString {
             var time = 1000
@@ -579,7 +751,7 @@ class BeatmapArchiveImporterTest {
             appendLine()
             appendLine("[General]")
             appendLine("AudioFilename: audio.mp3")
-            appendLine("Mode: 0")
+            appendLine("Mode: $mode")
             appendLine("PreviewTime: 0")
             appendLine()
             appendLine("[Metadata]")

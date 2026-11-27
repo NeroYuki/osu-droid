@@ -548,7 +548,8 @@ public class MainActivity extends BaseGameActivity implements
         if (result.success) {
             affectedDirectories.addAll(result.affectedDirectories);
         } else {
-            ToastLogger.showText("Beatmap import failed: " + String.join("; ", result.errors), true);
+            Debug.e("Beatmap import failed: " + String.join("; ", result.errors));
+            ToastLogger.showText("Beatmap import failed: " + result.getErrorSummary(), true);
         }
     }
 

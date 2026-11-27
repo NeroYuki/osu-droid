@@ -10,7 +10,6 @@ import com.osudroid.multiplayer.Multiplayer
 import com.osudroid.skillcourse.CourseMap
 import com.osudroid.ui.v1.DownloadFragment
 import com.osudroid.utils.async
-import ru.nsu.ccfit.zuev.osu.Config
 import ru.nsu.ccfit.zuev.osu.GlobalManager
 import ru.nsu.ccfit.zuev.osu.ToastLogger
 import ru.nsu.ccfit.zuev.osu.helper.StringTable
@@ -290,17 +289,10 @@ object BeatmapDownloader : IFileRequestObserver {
             )
         }
 
-        if (importResult.success) {
-            if (Config.isDELETE_OSZ()) {
-                try {
-                    downloader.file.delete()
-                } catch (_: Exception) {
-                }
-            }
-        } else {
+        if (!importResult.success) {
             mainThread {
                 ToastLogger.showText(
-                    "Import failed: " + importResult.errors.firstOrNull().orEmpty(),
+                    "Import failed: " + importResult.errorSummary,
                     true,
                 )
             }
@@ -316,7 +308,7 @@ object BeatmapDownloader : IFileRequestObserver {
                 },
                 suggestedFilename = job.filename,
                 importResult = importResult,
-                error = importResult.errors.firstOrNull(),
+                error = if (importResult.success) null else importResult.errorSummary,
             ),
         )
     }

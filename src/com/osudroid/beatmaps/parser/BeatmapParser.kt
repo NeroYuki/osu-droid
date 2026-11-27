@@ -93,7 +93,7 @@ class BeatmapParser {
             scope?.ensureActive()
 
             if (beatmap.general.mode != 0) {
-                throw IllegalArgumentException("Not an osu!standard beatmap")
+                throw UnsupportedBeatmapModeException()
             }
 
             var line = currentLine ?: continue
