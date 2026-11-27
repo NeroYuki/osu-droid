@@ -521,6 +521,11 @@ public class OnlineManager {
 
         ArrayList<String> response = sendRequestOnce(post, endpoint + "submit", submissionClient);
 
+        return applyRecordResponse(response);
+    }
+
+    /** Applies the tournament server's rank, score, accuracy and performance response. */
+    boolean applyRecordResponse(ArrayList<String> response) {
         if (response == null) {
             return false;
         }
@@ -534,7 +539,7 @@ public class OnlineManager {
         }
 
         String[] resp = response.get(1).split("\\s+");
-        if (resp.length < 5) {
+        if (resp.length < 4) {
             failMessage = "Invalid server response";
             return false;
         }
