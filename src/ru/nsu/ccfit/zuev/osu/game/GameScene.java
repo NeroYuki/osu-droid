@@ -2721,9 +2721,6 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
                     scoreName = "sliderpoint30";
                     stat.registerHit(30, false, false);
                     stat.addSliderHeadHit();
-                    if (spectatorDataManager != null) {
-                        spectatorDataManager.addEvent();
-                    }
                     createBurstEffectSliderStart(judgementPos, color);
 
                     if (nearestCursorId >= 0) {
@@ -2746,9 +2743,6 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
                     scoreName = "sliderpoint30";
                     stat.registerHit(30, false, false);
                     stat.addSliderRepeatHit();
-                    if (spectatorDataManager != null) {
-                        spectatorDataManager.addEvent();
-                    }
                 }
                 break;
 
@@ -2757,9 +2751,6 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
                     scoreName = "sliderpoint10";
                     stat.registerHit(10, false, false);
                     stat.addSliderTickHit();
-                    if (spectatorDataManager != null) {
-                        spectatorDataManager.addEvent();
-                    }
                 }
                 break;
 
